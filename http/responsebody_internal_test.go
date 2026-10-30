@@ -14,6 +14,8 @@
 package http
 
 import (
+	"io"
+	nethttp "net/http"
 	"strings"
 	"testing"
 
@@ -74,4 +76,65 @@ func TestEPBSProposalResponseLimitsAreSurvivable(t *testing.T) {
 			require.LessOrEqual(t, 2*test.limit, maxProposalResponsePeakAllocation)
 		})
 	}
+}
+
+func TestReadLimitedResponse(t *testing.T) {
+	limits := responseLimits{ssz: 4, json: 8}
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		length      int64
+		err         bool
+	}{
+		{name: "SSZAtLimit", contentType: "application/octet-stream", body: "1234", length: -1},
+		{name: "SSZOverLimit", contentType: "application/octet-stream", body: "12345", length: -1, err: true},
+		{name: "JSONAtLimit", contentType: "application/json", body: "12345678", length: -1},
+		{name: "JSONOverLimit", contentType: "application/json", body: "123456789", length: -1, err: true},
+		{name: "JSONUnderSSZRequestUsesJSONLimit", contentType: "application/json", body: "12345", length: -1},
+		{name: "NoContentTypeUsesJSONLimit", body: "12345", length: -1},
+		{name: "UnknownContentTypeUsesJSONLimit", contentType: "text/plain", body: "12345", length: -1},
+		{name: "DeclaredLengthOverLimit", contentType: "application/octet-stream", body: "1", length: 5, err: true},
+		{name: "UnboundedEncoding", contentType: "application/octet-stream", body: "1234567890", length: -1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			l := limits
+			if test.name == "UnboundedEncoding" {
+				l.ssz = 0
+			}
+			tracker := &readTracker{r: strings.NewReader(test.body)}
+			resp := &nethttp.Response{
+				Header:        nethttp.Header{},
+				ContentLength: test.length,
+				Body:          io.NopCloser(tracker),
+			}
+			if test.contentType != "" {
+				resp.Header.Set("Content-Type", test.contentType)
+			}
+			body, err := readLimitedResponse(resp, l)
+			if test.err {
+				require.Error(t, err)
+				if test.length > 0 {
+					require.False(t, tracker.read)
+				}
+
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.body, string(body))
+		})
+	}
+}
+
+type readTracker struct {
+	r    io.Reader
+	read bool
+}
+
+func (r *readTracker) Read(p []byte) (int, error) {
+	r.read = true
+
+	return r.r.Read(p)
 }
