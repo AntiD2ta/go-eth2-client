@@ -14,6 +14,8 @@
 package http
 
 import (
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -74,4 +76,51 @@ func TestEPBSProposalResponseLimitsAreSurvivable(t *testing.T) {
 			require.LessOrEqual(t, 2*test.limit, maxProposalResponsePeakAllocation)
 		})
 	}
+}
+
+func TestReadResponseLimits(t *testing.T) {
+	limits := responseLimits{ssz: 4, json: 8}
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		length      int64
+		err         bool
+	}{
+		{name: "SSZAtLimit", contentType: "application/octet-stream", body: "1234"},
+		{name: "SSZOver", contentType: "application/octet-stream", body: "12345", length: -1, err: true},
+		{name: "JSONOnSSZRequest", contentType: "application/json", body: "12345678"},
+		{name: "JSONOver", contentType: "application/json", body: "123456789", length: -1, err: true},
+		{name: "NoContentType", body: "12345678"},
+		{name: "NoContentTypeOver", body: "123456789", length: -1, err: true},
+		{name: "UnknownContentType", contentType: "text/plain", body: "12345678"},
+		{name: "DeclaredLengthOver", contentType: "application/octet-stream", body: "1", length: 5, err: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resp := &http.Response{Header: http.Header{}, Body: io.NopCloser(strings.NewReader(test.body)), ContentLength: int64(len(test.body))}
+			if test.length != 0 {
+				resp.ContentLength = test.length
+			}
+			if test.contentType != "" {
+				resp.Header.Set("Content-Type", test.contentType)
+			}
+			body, err := readResponse(resp, limits)
+			if test.err {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.body, string(body))
+		})
+	}
+
+	t.Run("ZeroLimitUnbounded", func(t *testing.T) {
+		resp := &http.Response{Header: http.Header{}, Body: io.NopCloser(strings.NewReader("123456789")), ContentLength: 9}
+		resp.Header.Set("Content-Type", "application/octet-stream")
+		body, err := readResponse(resp, responseLimits{json: 4})
+		require.NoError(t, err)
+		require.Len(t, body, 9)
+	})
 }
