@@ -14,6 +14,7 @@
 package gloas_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -71,4 +72,27 @@ func TestBuilderVersionYAML(t *testing.T) {
 	var decoded gloas.Builder
 	require.NoError(t, decoded.UnmarshalYAML(data))
 	require.Equal(t, builder, &decoded)
+}
+
+func TestBuilderVersionBeaconAPIJSON(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"version":"1"`)
+
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, builder, &decoded)
+}
+
+func TestBuilderVersionLegacyNumericJSON(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	legacy := bytes.Replace(data, []byte(`"version":"1"`), []byte(`"version":1`), 1)
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(legacy, &decoded))
+	require.Equal(t, builder, &decoded)
+	invalid := bytes.Replace(data, []byte(`"version":"1"`), []byte(`"version":"256"`), 1)
+	require.Error(t, json.Unmarshal(invalid, &decoded))
 }
