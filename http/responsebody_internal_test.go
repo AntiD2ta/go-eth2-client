@@ -33,7 +33,7 @@ func TestReadResponseBody(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			body, err := readResponseBody(strings.NewReader(test.body), test.limit)
+			body, err := readResponseBody(strings.NewReader(test.body), test.limit, -1)
 			if test.err != "" {
 				require.EqualError(t, err, test.err)
 				require.Nil(t, body)

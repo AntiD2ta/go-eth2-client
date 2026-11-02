@@ -52,7 +52,7 @@ func (s *Service) post(ctx context.Context,
 	*httpResponse,
 	error,
 ) {
-	return s.postWithResponseLimit(ctx, endpoint, query, opts, body, contentType, headers, 0)
+	return s.postWithResponseLimit(ctx, endpoint, query, opts, body, contentType, headers, responseLimits{})
 }
 
 // postWithResponseLimit sends an HTTP POST request and bounds its response body when requested.
@@ -63,7 +63,7 @@ func (s *Service) postWithResponseLimit(ctx context.Context,
 	body io.Reader,
 	contentType ContentType,
 	headers map[string]string,
-	responseLimit int,
+	limits responseLimits,
 ) (
 	*httpResponse,
 	error,
@@ -144,8 +144,12 @@ func (s *Service) postWithResponseLimit(ctx context.Context,
 		statusCode: resp.StatusCode,
 	}
 	populateHeaders(res, resp)
+	if err := populateContentType(res, resp); err != nil {
+		log.Debug().Err(err).Msg("Failed to obtain content type; assuming JSON")
+		res.contentType = ContentTypeJSON
+	}
 
-	res.body, err = readResponseBody(resp.Body, responseLimit)
+	res.body, err = readResponseBody(resp.Body, limits.forContentType(res.contentType), resp.ContentLength)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled):
@@ -169,13 +173,6 @@ func (s *Service) postWithResponseLimit(ctx context.Context,
 		s.monitorPostComplete(ctx, callURL.Path, "succeeded")
 
 		return res, nil
-	}
-
-	if err := populateContentType(res, resp); err != nil {
-		// For now, assume that unknown type is JSON.
-		log.Debug().Err(err).Msg("Failed to obtain content type; assuming JSON")
-
-		res.contentType = ContentTypeJSON
 	}
 
 	span.AddEvent("Received response", trace.WithAttributes(
@@ -246,9 +243,25 @@ type httpResponse struct {
 	body             []byte
 }
 
-func readResponseBody(body io.Reader, limit int) ([]byte, error) {
+type responseLimits struct {
+	ssz  int
+	json int
+}
+
+func (l responseLimits) forContentType(contentType ContentType) int {
+	if contentType == ContentTypeSSZ {
+		return l.ssz
+	}
+
+	return l.json
+}
+
+func readResponseBody(body io.Reader, limit int, contentLength int64) ([]byte, error) {
 	if limit <= 0 {
 		return io.ReadAll(body)
+	}
+	if contentLength > int64(limit) {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(body, int64(limit)+1))
@@ -272,7 +285,7 @@ func (s *Service) get(ctx context.Context,
 	*httpResponse,
 	error,
 ) {
-	return s.getWithResponseLimit(ctx, endpoint, query, opts, supportsSSZ, 0)
+	return s.getWithResponseLimit(ctx, endpoint, query, opts, supportsSSZ, responseLimits{})
 }
 
 //nolint:revive
@@ -281,7 +294,7 @@ func (s *Service) getWithResponseLimit(ctx context.Context,
 	query string,
 	opts *api.CommonOpts,
 	supportsSSZ bool,
-	responseLimit int,
+	limits responseLimits,
 ) (
 	*httpResponse,
 	error,
@@ -350,12 +363,16 @@ func (s *Service) getWithResponseLimit(ctx context.Context,
 		statusCode: resp.StatusCode,
 	}
 	populateHeaders(res, resp)
+	if err := populateContentType(res, resp); err != nil {
+		log.Debug().Err(err).Msg("Failed to obtain content type; assuming JSON")
+		res.contentType = ContentTypeJSON
+	}
 
 	// Although it would be more efficient to keep the body as a Reader, that would
 	// require the calling function to be aware that it needs to close the body
 	// once it is done with it.  To avoid that complexity, we read here and store the
 	// body as a byte array.
-	res.body, err = readResponseBody(resp.Body, responseLimit)
+	res.body, err = readResponseBody(resp.Body, limits.forContentType(res.contentType), resp.ContentLength)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled):
@@ -379,13 +396,6 @@ func (s *Service) getWithResponseLimit(ctx context.Context,
 		s.monitorGetComplete(ctx, callURL.Path, "succeeded")
 
 		return res, nil
-	}
-
-	if err := populateContentType(res, resp); err != nil {
-		// For now, assume that unknown type is JSON.
-		log.Debug().Err(err).Msg("Failed to obtain content type; assuming JSON")
-
-		res.contentType = ContentTypeJSON
 	}
 
 	span.AddEvent("Received response", trace.WithAttributes(
@@ -467,14 +477,6 @@ func populateHeaders(res *httpResponse, resp *http.Response) {
 func populateContentType(res *httpResponse, resp *http.Response) error {
 	respContentTypes, exists := resp.Header["Content-Type"]
 	if !exists {
-		if len(res.body) == 0 {
-			// There's no body to decode.  Some servers don't send a content type in this
-			// situation, but it doesn't matter anyway; set it to JSON and return.
-			res.contentType = ContentTypeJSON
-
-			return nil
-		}
-
 		return errors.New("no content type supplied in response")
 	}
 
