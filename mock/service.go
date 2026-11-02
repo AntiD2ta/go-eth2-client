@@ -59,6 +59,7 @@ type Service struct {
 	BeaconStateFunc                    func(context.Context, *api.BeaconStateOpts) (*api.Response[*spec.VersionedBeaconState], error)
 	BeaconStateRandaoFunc              func(context.Context, *api.BeaconStateRandaoOpts) (*api.Response[*phase0.Root], error)
 	BeaconStateRootFunc                func(context.Context, *api.BeaconStateRootOpts) (*api.Response[*phase0.Root], error)
+	BuildersFunc                       func(context.Context, *api.BuildersOpts) (*api.Response[[]*apiv1.Builder], error)
 	BlockRewardsFunc                   func(context.Context, *api.BlockRewardsOpts) (*api.Response[*apiv1.BlockRewards], error)
 	DepositContractFunc                func(context.Context, *api.DepositContractOpts) (*api.Response[*apiv1.DepositContract], error)
 	EPBSProposalFunc                   func(context.Context, *api.EPBSProposalOpts) (*api.Response[*api.VersionedEPBSProposal], error)
