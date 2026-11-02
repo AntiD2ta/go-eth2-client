@@ -99,7 +99,6 @@ func TestValidateEPBSProposalExecutionValueUnknownAndSelfBuild(t *testing.T) {
 			name:     "SelfBuild",
 			proposal: epbsProposalWithBid(staticBuilderIndexSelfBuild, 0, 7, 7_000_000_000),
 			config:   duplicateURLs,
-			unknown:  true,
 		},
 		{
 			name:     "SelfBuildNonZeroBid",
