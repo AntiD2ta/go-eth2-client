@@ -72,3 +72,47 @@ func TestBuilderVersionYAML(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalYAML(data))
 	require.Equal(t, builder, &decoded)
 }
+
+func TestBuilderVersionSpecJSON(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(data, &object))
+	object["version"] = "1"
+	data, err = json.Marshal(object)
+	require.NoError(t, err)
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, builder, &decoded)
+	data, err = json.Marshal(&decoded)
+	require.NoError(t, err)
+	require.JSONEq(t, mustJSON(t, object), string(data))
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func TestBuilderVersionLegacyAndInvalidJSON(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &fields))
+	fields["version"] = json.RawMessage(`1`)
+	legacy, err := json.Marshal(fields)
+	require.NoError(t, err)
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(legacy, &decoded))
+	require.Equal(t, builder, &decoded)
+	for _, version := range []string{`"256"`, `"-1"`, `"x"`, `256`} {
+		fields["version"] = json.RawMessage(version)
+		input, err := json.Marshal(fields)
+		require.NoError(t, err)
+		require.Error(t, json.Unmarshal(input, &decoded))
+	}
+}

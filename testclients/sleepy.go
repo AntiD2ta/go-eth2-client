@@ -799,6 +799,23 @@ func (s *Sleepy) ValidatorLiveness(ctx context.Context,
 	return next.ValidatorLiveness(ctx, opts)
 }
 
+// Builders provides the builders for a given state.
+func (s *Sleepy) Builders(ctx context.Context,
+	opts *api.BuildersOpts,
+) (
+	*api.Response[[]*apiv1.Builder],
+	error,
+) {
+	s.sleep(ctx)
+
+	next, isNext := s.next.(consensusclient.BuildersProvider)
+	if !isNext {
+		return nil, errors.New("next does not support this call")
+	}
+
+	return next.Builders(ctx, opts)
+}
+
 // PendingDeposits provides the pending deposits for a given state.
 func (s *Sleepy) PendingDeposits(ctx context.Context,
 	opts *api.PendingDepositsOpts,
