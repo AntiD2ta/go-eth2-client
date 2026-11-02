@@ -178,3 +178,109 @@ func TestEPBSProposalRejectsNonUTF8BuilderURL(t *testing.T) {
 	require.ErrorContains(t, err, "builder 0 has invalid URL")
 	require.Zero(t, blockRequests.Load())
 }
+
+func TestEPBSProposalBidPolicy(t *testing.T) {
+	entry := func(url string, paymentCap, floor phase0.Gwei) *gloas.BuilderEntry {
+		builder := validEPBSBuilderConfig().Builders[0]
+		builder.URL = []byte(url)
+		builder.MaxExecutionPayment = paymentCap
+		builder.MinBid = floor
+		return builder
+	}
+	tests := []struct {
+		name                   string
+		url                    []string
+		config                 *gloas.BuilderConfig
+		value, payment         phase0.Gwei
+		self, reject, withheld bool
+	}{
+		{name: "unmatched below floor", url: []string{"https://unknown.example"}, config: &gloas.BuilderConfig{MinBid: 10}, value: 1, reject: true},
+		{name: "duplicate below floor", url: []string{"https://a.example"}, config: &gloas.BuilderConfig{MinBid: 10, Builders: []*gloas.BuilderEntry{entry("https://a.example", 2, 0), entry("https://a.example", 3, 0)}}, value: 1, reject: true},
+		{name: "joined below floor", url: []string{"https://a.example", "https://b.example"}, config: &gloas.BuilderConfig{MinBid: 10}, value: 1, reject: true},
+		{name: "joined header cannot match a single entry", url: []string{"https://a.example", "https://b.example"}, config: &gloas.BuilderConfig{MinBid: 10, Builders: []*gloas.BuilderEntry{entry("https://a.example;https://b.example", 0, 0)}}, value: 1, reject: true},
+		{name: "p2p payment below floor", config: &gloas.BuilderConfig{MinBid: 10}, value: 1, payment: 1, reject: true},
+		{name: "p2p uses largest cap", config: &gloas.BuilderConfig{MinBid: 10, Builders: []*gloas.BuilderEntry{entry("https://a.example", 1, 0), entry("https://b.example", 3, 0)}}, value: 7, payment: 4, withheld: true},
+		{name: "p2p cap enforced", config: &gloas.BuilderConfig{MinBid: 11, Builders: []*gloas.BuilderEntry{entry("https://a.example", 1, 0), entry("https://b.example", 3, 0)}}, value: 7, payment: 4, reject: true},
+		{name: "direct entry floor and cap", url: []string{"https://b.example"}, config: &gloas.BuilderConfig{MinBid: 100, Builders: []*gloas.BuilderEntry{entry("https://a.example", 1, 0), entry("https://b.example", 3, 10)}}, value: 7, payment: 3},
+		{name: "direct entry cap enforced", url: []string{"https://a.example"}, config: &gloas.BuilderConfig{Builders: []*gloas.BuilderEntry{entry("https://a.example", 1, 10), entry("https://b.example", 9, 0)}}, value: 7, payment: 3, reject: true},
+		{name: "unmatched accepted but value withheld", url: []string{"https://unknown.example"}, config: &gloas.BuilderConfig{MinBid: 7}, value: 7, withheld: true},
+		{name: "duplicate accepted but value withheld", url: []string{"https://a.example"}, config: &gloas.BuilderConfig{MinBid: 10, Builders: []*gloas.BuilderEntry{entry("https://a.example", 1, 0), entry("https://a.example", 3, 0)}}, value: 7, payment: 3, withheld: true},
+		{name: "self build retains value", config: &gloas.BuilderConfig{MinBid: 100}, self: true},
+	}
+	for _, test := range tests {
+		for _, jsonResponse := range []bool{true, false} {
+			name := test.name + "/ssz"
+			if jsonResponse {
+				name = test.name + "/json"
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx := context.Background()
+				mockService, err := mock.New(ctx)
+				require.NoError(t, err)
+				include := false
+				mockResponse, err := mockService.EPBSProposal(ctx, &api.EPBSProposalOpts{Slot: 123, IncludePayload: &include})
+				require.NoError(t, err)
+				bid := mockResponse.Data.Gloas.Body.SignedExecutionPayloadBid.Message
+				bid.BuilderIndex = 1
+				if test.self {
+					bid.BuilderIndex = gloas.BuilderIndex(^uint64(0))
+				}
+				bid.Value, bid.ExecutionPayment = test.value, test.payment
+				var block []byte
+				if jsonResponse {
+					block, err = json.Marshal(mockResponse.Data.Gloas)
+				} else {
+					block, err = mockResponse.Data.Gloas.MarshalSSZ()
+				}
+				require.NoError(t, err)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/eth/v1/node/syncing":
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+					case "/eth/v1/node/version":
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+					case "/eth/v4/validator/blocks/123":
+						w.Header().Set("Eth-Consensus-Version", "gloas")
+						w.Header().Set("Eth-Execution-Payload-Value", "7000000000")
+						w.Header().Set("Eth-Consensus-Block-Value", "5")
+						for _, url := range test.url {
+							w.Header().Add("Eth-Builder-Url", url)
+						}
+						if jsonResponse {
+							w.Header().Set("Content-Type", "application/json")
+							_, _ = w.Write(append([]byte(`{"version":"gloas","execution_payload_included":false,"execution_payload_value":"7000000000","data":`), append(block, '}')...))
+						} else {
+							w.Header().Set("Content-Type", "application/octet-stream")
+							w.Header().Set("Eth-Execution-Payload-Included", "false")
+							_, _ = w.Write(block)
+						}
+					default:
+						http.NotFound(w, r)
+					}
+				}))
+				defer server.Close()
+				service, err := eth2http.New(ctx, eth2http.WithAddress(server.URL), eth2http.WithAllowDelayedStart(true), eth2http.WithEnforceJSON(jsonResponse), eth2http.WithLogLevel(zerolog.Disabled))
+				require.NoError(t, err)
+				response, err := service.(client.EPBSProposalProvider).EPBSProposal(ctx, &api.EPBSProposalOpts{Slot: 123, BuilderConfig: test.config, IncludePayload: &include})
+				if test.reject {
+					require.ErrorIs(t, err, client.ErrInconsistentResult)
+					require.ErrorContains(t, err, "below minimum")
+					return
+				}
+				require.NoError(t, err)
+				if test.withheld {
+					require.Nil(t, response.Data.ExecutionValue)
+					require.NotContains(t, response.Metadata, "Eth-Execution-Payload-Value")
+					require.NotContains(t, response.Metadata, "execution_payload_value")
+					require.Equal(t, "5", response.Data.Value().String())
+				} else {
+					require.Equal(t, "7000000000", response.Data.ExecutionValue.String())
+					require.Equal(t, "7000000005", response.Data.Value().String())
+					require.Contains(t, response.Metadata, "Eth-Execution-Payload-Value")
+				}
+			})
+		}
+	}
+}
