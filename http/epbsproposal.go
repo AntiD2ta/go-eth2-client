@@ -66,6 +66,13 @@ const maxEPBSProposalResponseSize = 256 * 1024 * 1024
 // one, which the headroom above makes immaterial.
 const maxEPBSProposalJSONResponseSize = 512 * 1024 * 1024
 
+// epbsResponseLimit bounds the ePBS fetch endpoints whichever encoding answers.
+var epbsResponseLimit = responseLimit{ssz: maxEPBSResponseSize, json: maxEPBSResponseSize}
+
+// epbsProposalResponseLimit bounds block production by the encoding the node
+// answered with, which need not be the one requested.
+var epbsProposalResponseLimit = responseLimit{ssz: maxEPBSProposalResponseSize, json: maxEPBSProposalJSONResponseSize}
+
 // EPBSProposal fetches a potential ePBS beacon block for signing.
 func (s *Service) EPBSProposal(ctx context.Context,
 	opts *api.EPBSProposalOpts,
@@ -100,11 +107,6 @@ func (s *Service) EPBSProposal(ctx context.Context,
 		"Eth-Consensus-Version": spec.DataVersionGloas.String(),
 	}
 
-	responseLimit := maxEPBSProposalResponseSize
-	if contentType == ContentTypeJSON {
-		responseLimit = maxEPBSProposalJSONResponseSize
-	}
-
 	httpResponse, err := s.postWithResponseLimit(
 		ctx,
 		endpoint,
@@ -113,7 +115,7 @@ func (s *Service) EPBSProposal(ctx context.Context,
 		bytes.NewReader(body),
 		contentType,
 		headers,
-		responseLimit,
+		epbsProposalResponseLimit,
 	)
 	if err != nil {
 		return nil, errors.Join(errors.New("failed to request epbs beacon block proposal"), err)
