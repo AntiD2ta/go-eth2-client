@@ -51,7 +51,9 @@ func (s *Service) PayloadAttestationPool(ctx context.Context,
 
 	// The endpoint advertises SSZ, but as a bare SSZ list with no container to
 	// decode into, so JSON is requested here.
-	httpResponse, err := s.getWithResponseLimit(ctx, endpoint, query, &opts.Common, false, maxEPBSResponseSize)
+	httpResponse, err := s.getWithResponseLimit(
+		ctx, endpoint, query, &opts.Common, false, responseLimits{ssz: maxEPBSResponseSize, json: maxEPBSResponseSize},
+	)
 	if err != nil {
 		return nil, err
 	}
