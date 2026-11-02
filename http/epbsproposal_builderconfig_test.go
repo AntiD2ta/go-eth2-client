@@ -178,3 +178,107 @@ func TestEPBSProposalRejectsNonUTF8BuilderURL(t *testing.T) {
 	require.ErrorContains(t, err, "builder 0 has invalid URL")
 	require.Zero(t, blockRequests.Load())
 }
+
+func TestEPBSProposalWithheldValueIsAbsentFromMetadata(t *testing.T) {
+	for _, format := range []string{"JSON", "SSZ"} {
+		t.Run(format, func(t *testing.T) {
+			ctx := context.Background()
+			mockService, err := mock.New(ctx)
+			require.NoError(t, err)
+			included := false
+			mockResponse, err := mockService.EPBSProposal(ctx, &api.EPBSProposalOpts{Slot: 123, IncludePayload: &included})
+			require.NoError(t, err)
+			mockResponse.Data.Gloas.Body.SignedExecutionPayloadBid.Message.BuilderIndex = 1
+			mockResponse.Data.Gloas.Body.SignedExecutionPayloadBid.Message.Value = 1
+			var block []byte
+			if format == "JSON" {
+				block, err = json.Marshal(mockResponse.Data.Gloas)
+			} else {
+				block, err = mockResponse.Data.Gloas.MarshalSSZ()
+			}
+			require.NoError(t, err)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/eth/v1/node/syncing":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+				case "/eth/v1/node/version":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+				case "/eth/v4/validator/blocks/123":
+					w.Header().Set("Eth-Consensus-Version", "gloas")
+					w.Header().Add("Eth-Builder-Url", "https://builder.example")
+					w.Header().Add("Eth-Builder-Url", "https://unknown.example")
+					w.Header().Set("Eth-Execution-Payload-Value", "123")
+					if format == "JSON" {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = w.Write(append([]byte(`{"version":"gloas","execution_payload_included":false,"execution_payload_value":"123","data":`), append(block, '}')...))
+					} else {
+						w.Header().Set("Content-Type", "application/octet-stream")
+						w.Header().Set("Eth-Execution-Payload-Included", "false")
+						_, _ = w.Write(block)
+					}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			service, err := eth2http.New(ctx, eth2http.WithAddress(server.URL), eth2http.WithAllowDelayedStart(true), eth2http.WithEnforceJSON(format == "JSON"), eth2http.WithLogLevel(zerolog.Disabled))
+			require.NoError(t, err)
+			response, err := service.(client.EPBSProposalProvider).EPBSProposal(ctx, &api.EPBSProposalOpts{
+				Slot: 123, BuilderConfig: validEPBSBuilderConfig(), IncludePayload: &included,
+			})
+			require.NoError(t, err)
+			require.Nil(t, response.Data.ExecutionValue)
+			require.NotContains(t, response.Metadata, "Eth-Execution-Payload-Value")
+			require.NotContains(t, response.Metadata, "execution_payload_value")
+			require.Equal(t, "https://builder.example;https://unknown.example", response.Metadata["Eth-Builder-Url"])
+
+			config := validEPBSBuilderConfig()
+			config.MinBid = 2
+			_, err = service.(client.EPBSProposalProvider).EPBSProposal(ctx, &api.EPBSProposalOpts{
+				Slot: 123, BuilderConfig: config, IncludePayload: &included,
+			})
+			require.ErrorIs(t, err, client.ErrInconsistentResult)
+			require.ErrorContains(t, err, "execution payload bid below minimum")
+		})
+	}
+}
+
+func TestEPBSProposalSelfBuildUsesJSONExecutionValue(t *testing.T) {
+	ctx := context.Background()
+	mockService, err := mock.New(ctx)
+	require.NoError(t, err)
+	included := false
+	mockResponse, err := mockService.EPBSProposal(ctx, &api.EPBSProposalOpts{Slot: 123, IncludePayload: &included})
+	require.NoError(t, err)
+	mockResponse.Data.Gloas.Body.SignedExecutionPayloadBid.Message.BuilderIndex = gloas.BuilderIndex(^uint64(0))
+	mockResponse.Data.Gloas.Body.SignedExecutionPayloadBid.Message.Value = 0
+	block, err := json.Marshal(mockResponse.Data.Gloas)
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/eth/v1/node/syncing":
+			_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+		case "/eth/v1/node/version":
+			_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+		case "/eth/v4/validator/blocks/123":
+			w.Header().Set("Eth-Consensus-Version", "gloas")
+			_, _ = w.Write(append([]byte(`{"version":"gloas","execution_payload_included":false,"execution_payload_value":"123","data":`), append(block, '}')...))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	service, err := eth2http.New(ctx, eth2http.WithAddress(server.URL), eth2http.WithAllowDelayedStart(true), eth2http.WithEnforceJSON(true), eth2http.WithLogLevel(zerolog.Disabled))
+	require.NoError(t, err)
+	response, err := service.(client.EPBSProposalProvider).EPBSProposal(ctx, &api.EPBSProposalOpts{
+		Slot: 123, BuilderConfig: &gloas.BuilderConfig{}, IncludePayload: &included,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "123", response.Data.Value().String())
+	require.Equal(t, "123", response.Metadata["execution_payload_value"])
+}
