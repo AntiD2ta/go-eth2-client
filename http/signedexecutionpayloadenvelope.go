@@ -127,7 +127,8 @@ func (s *Service) fetchSignedExecutionPayloadEnvelope(ctx context.Context,
 
 	endpoint := fmt.Sprintf("/eth/v1/beacon/execution_payload_envelopes/%s", opts.Block)
 
-	httpResponse, err := s.getWithResponseLimit(ctx, endpoint, "", &opts.Common, true, maxEPBSResponseSize)
+	httpResponse, err := s.getWithResponseLimit(ctx, endpoint, "", &opts.Common, true,
+		responseLimits{ssz: maxEPBSResponseSize, json: maxEPBSResponseSize})
 	if err != nil {
 		return nil, err
 	}

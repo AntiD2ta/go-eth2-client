@@ -14,6 +14,15 @@
 package http
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/url"
+	"time"
+
+	"github.com/attestantio/go-eth2-client/api"
+	"github.com/attestantio/go-eth2-client/spec/gloas"
+	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"strings"
 	"testing"
 
@@ -73,5 +82,255 @@ func TestEPBSProposalResponseLimitsAreSurvivable(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.LessOrEqual(t, 2*test.limit, maxProposalResponsePeakAllocation)
 		})
+	}
+}
+
+func TestPostRejectsDeclaredOversizeBeforeReading(t *testing.T) {
+	body := &countingResponseBody{}
+	base, err := url.Parse("http://example.test")
+	require.NoError(t, err)
+	s := &Service{
+		base:    base,
+		timeout: time.Second,
+		client: &http.Client{Transport: responseRoundTripper(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Header:        http.Header{"Content-Type": []string{"application/json"}},
+				ContentLength: 5,
+				Body:          body,
+			}, nil
+		})},
+	}
+	_, err = s.postWithResponseLimit(context.Background(), "/test", "", &api.CommonOpts{}, strings.NewReader(""), ContentTypeSSZ, nil, responseLimits{ssz: 4, json: 4})
+	require.ErrorContains(t, err, "response body exceeds 4 bytes")
+	require.Zero(t, body.reads)
+}
+
+type responseRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f responseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+type countingResponseBody struct{ reads int }
+
+func (b *countingResponseBody) Read([]byte) (int, error) {
+	b.reads++
+	return 0, io.EOF
+}
+
+func (*countingResponseBody) Close() error { return nil }
+
+func TestPostUsesJSONLimitForJSONResponseToSSZRequest(t *testing.T) {
+	base, err := url.Parse("http://example.test")
+	require.NoError(t, err)
+	s := &Service{
+		base:    base,
+		timeout: time.Second,
+		client: &http.Client{Transport: responseRoundTripper(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Header:        http.Header{"Content-Type": []string{"application/json"}},
+				ContentLength: 5,
+				Body:          io.NopCloser(strings.NewReader("12345")),
+			}, nil
+		})},
+	}
+	res, err := s.postWithResponseLimit(context.Background(), "/test", "", &api.CommonOpts{}, strings.NewReader(""), ContentTypeSSZ, nil, responseLimits{ssz: 4, json: 8})
+	require.NoError(t, err)
+	require.Equal(t, "12345", string(res.body))
+}
+
+func TestGetRejectsDeclaredOversizeBeforeReading(t *testing.T) {
+	body := &countingResponseBody{}
+	base, err := url.Parse("http://example.test")
+	require.NoError(t, err)
+	s := &Service{
+		base:    base,
+		timeout: time.Second,
+		client: &http.Client{Transport: responseRoundTripper(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Header:        http.Header{"Content-Type": []string{"application/json"}},
+				ContentLength: 5,
+				Body:          body,
+			}, nil
+		})},
+	}
+	_, err = s.getWithResponseLimit(context.Background(), "/test", "", &api.CommonOpts{}, true, responseLimits{ssz: 4, json: 4})
+	require.ErrorContains(t, err, "response body exceeds 4 bytes")
+	require.Zero(t, body.reads)
+}
+
+func TestGetUsesJSONLimitForJSONResponseToSSZRequest(t *testing.T) {
+	base, err := url.Parse("http://example.test")
+	require.NoError(t, err)
+	s := &Service{
+		base:    base,
+		timeout: time.Second,
+		client: &http.Client{Transport: responseRoundTripper(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Header:        http.Header{"Content-Type": []string{"application/json"}, "Eth-Consensus-Version": []string{"gloas"}},
+				ContentLength: 5,
+				Body:          io.NopCloser(strings.NewReader("12345")),
+			}, nil
+		})},
+	}
+	res, err := s.getWithResponseLimit(context.Background(), "/test", "", &api.CommonOpts{}, true, responseLimits{ssz: 4, json: 8})
+	require.NoError(t, err)
+	require.Equal(t, "12345", string(res.body))
+}
+
+func TestResponseLimitsByEncoding(t *testing.T) {
+	tests := []struct {
+		name          string
+		contentTypes  []string
+		body          string
+		contentLength int64
+		limits        responseLimits
+		err           string
+	}{
+		{name: "JSONAtLimit", contentTypes: []string{"application/json; charset=utf-8"}, body: "12345678", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}},
+		{name: "JSONOverLimit", contentTypes: []string{"application/json"}, body: "123456789", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}, err: "response body exceeds 8 bytes"},
+		{name: "SSZAtLimit", contentTypes: []string{"application/octet-stream"}, body: "1234", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}},
+		{name: "SSZOverLimit", contentTypes: []string{"application/octet-stream"}, body: "12345", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}, err: "response body exceeds 4 bytes"},
+		{name: "MissingContentType", body: "12345678", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}},
+		{name: "MissingContentTypeOverLimit", body: "123456789", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}, err: "response body exceeds 8 bytes"},
+		{name: "UnknownContentType", contentTypes: []string{"text/plain"}, body: "12345678", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}},
+		{name: "MultipleContentTypes", contentTypes: []string{"application/octet-stream", "application/json"}, body: "12345678", contentLength: -1, limits: responseLimits{ssz: 4, json: 8}},
+		{name: "UnboundedJSON", contentTypes: []string{"application/json"}, body: "123456789", contentLength: 9, limits: responseLimits{ssz: 4}},
+		{name: "UnboundedSSZ", contentTypes: []string{"application/octet-stream"}, body: "123456789", contentLength: 9, limits: responseLimits{json: 4}},
+		{name: "JSONDeclaredAtLimit", contentTypes: []string{"application/json"}, body: "12345678", contentLength: 8, limits: responseLimits{ssz: 4, json: 8}},
+		{name: "SSZDeclaredAtLimit", contentTypes: []string{"application/octet-stream"}, body: "1234", contentLength: 4, limits: responseLimits{ssz: 4, json: 8}},
+	}
+
+	requests := []struct {
+		name   string
+		method string
+		json   bool
+	}{
+		{name: "GETSSZ", method: http.MethodGet},
+		{name: "GETJSON", method: http.MethodGet, json: true},
+		{name: "POSTSSZ", method: http.MethodPost},
+		{name: "POSTJSON", method: http.MethodPost, json: true},
+	}
+	for _, request := range requests {
+		for _, test := range tests {
+			t.Run(request.name+"/"+test.name, func(t *testing.T) {
+				base, err := url.Parse("http://example.test")
+				require.NoError(t, err)
+				s := &Service{
+					base:        base,
+					timeout:     time.Second,
+					enforceJSON: request.json,
+					client: &http.Client{Transport: responseRoundTripper(func(req *http.Request) (*http.Response, error) {
+						require.Equal(t, request.method, req.Method)
+						header := http.Header{"Eth-Consensus-Version": []string{"gloas"}}
+						if test.contentTypes != nil {
+							header["Content-Type"] = test.contentTypes
+						}
+						return &http.Response{StatusCode: http.StatusOK, Header: header, ContentLength: test.contentLength, Body: io.NopCloser(strings.NewReader(test.body))}, nil
+					})},
+				}
+				var res *httpResponse
+				if request.method == http.MethodGet {
+					res, err = s.getWithResponseLimit(context.Background(), "/test", "", &api.CommonOpts{}, true, test.limits)
+				} else {
+					contentType := ContentTypeSSZ
+					if request.json {
+						contentType = ContentTypeJSON
+					}
+					res, err = s.postWithResponseLimit(context.Background(), "/test", "", &api.CommonOpts{}, strings.NewReader(""), contentType, nil, test.limits)
+				}
+				if test.err != "" {
+					require.ErrorContains(t, err, test.err)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, test.body, string(res.body))
+				}
+			})
+		}
+	}
+}
+
+func TestEPBSProposalResponseLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		length      int64
+		err         string
+		reads       int
+	}{
+		{name: "JSONUsesLargerLimit", contentType: "application/json", length: maxEPBSProposalResponseSize + 1, err: "no Eth-Consensus-Version header", reads: 1},
+		{name: "MissingTypeUsesLargerLimit", length: maxEPBSProposalResponseSize + 1, err: "no Eth-Consensus-Version header", reads: 1},
+		{name: "JSONOverLimit", contentType: "application/json", length: maxEPBSProposalJSONResponseSize + 1, err: "response body exceeds 536870912 bytes"},
+		{name: "SSZOverLimit", contentType: "application/octet-stream", length: maxEPBSProposalResponseSize + 1, err: "response body exceeds 268435456 bytes"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base, err := url.Parse("http://example.test")
+			require.NoError(t, err)
+			body := &countingResponseBody{}
+			s := &Service{
+				base: base, timeout: time.Second, connectionSynced: true,
+				client: &http.Client{Transport: responseRoundTripper(func(req *http.Request) (*http.Response, error) {
+					require.Equal(t, http.MethodPost, req.Method)
+					require.Equal(t, "/eth/v4/validator/blocks/1", req.URL.Path)
+					require.Equal(t, "application/octet-stream", req.Header.Get("Accept"))
+					header := http.Header{}
+					if test.contentType != "" {
+						header.Set("Content-Type", test.contentType)
+					}
+					return &http.Response{StatusCode: http.StatusOK, Header: header, ContentLength: test.length, Body: body}, nil
+				})},
+			}
+			include := false
+			_, err = s.EPBSProposal(context.Background(), &api.EPBSProposalOpts{Slot: 1, IncludePayload: &include, BuilderConfig: &gloas.BuilderConfig{}})
+			require.ErrorContains(t, err, test.err)
+			require.Equal(t, test.reads, body.reads)
+		})
+	}
+}
+
+func TestEPBSGetResponseLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		call func(*Service) error
+	}{
+		{name: "ExecutionPayloadEnvelope", path: "/eth/v1/validator/execution_payload_envelopes/1/", call: func(s *Service) error {
+			_, err := s.ExecutionPayloadEnvelope(context.Background(), &api.ExecutionPayloadEnvelopeOpts{Slot: 1, BeaconBlockRoot: phase0.Root{1}})
+			return err
+		}},
+		{name: "SignedExecutionPayloadEnvelope", path: "/eth/v1/beacon/execution_payload_envelopes/head", call: func(s *Service) error {
+			_, err := s.SignedExecutionPayloadEnvelope(context.Background(), &api.SignedExecutionPayloadEnvelopeOpts{Block: "head"})
+			return err
+		}},
+		{name: "PayloadAttestationData", path: "/eth/v1/validator/payload_attestation_data", call: func(s *Service) error {
+			_, err := s.PayloadAttestationData(context.Background(), &api.PayloadAttestationDataOpts{Slot: 1})
+			return err
+		}},
+		{name: "PayloadAttestationPool", path: "/eth/v1/beacon/pool/payload_attestations", call: func(s *Service) error {
+			_, err := s.PayloadAttestationPool(context.Background(), &api.PayloadAttestationPoolOpts{})
+			return err
+		}},
+	}
+	for _, test := range tests {
+		for _, contentType := range []string{"application/json", "application/octet-stream"} {
+			t.Run(test.name+"/"+contentType, func(t *testing.T) {
+				base, err := url.Parse("http://example.test")
+				require.NoError(t, err)
+				body := &countingResponseBody{}
+				s := &Service{base: base, timeout: time.Second, connectionActive: true, connectionSynced: true,
+					client: &http.Client{Transport: responseRoundTripper(func(req *http.Request) (*http.Response, error) {
+						require.Equal(t, http.MethodGet, req.Method)
+						require.True(t, strings.HasPrefix(req.URL.Path, test.path))
+						return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{contentType}}, ContentLength: maxEPBSResponseSize + 1, Body: body}, nil
+					})},
+				}
+				err = test.call(s)
+				require.ErrorContains(t, err, "response body exceeds 67108864 bytes")
+				require.Zero(t, body.reads)
+			})
+		}
 	}
 }
