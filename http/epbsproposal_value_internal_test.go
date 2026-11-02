@@ -99,7 +99,6 @@ func TestValidateEPBSProposalExecutionValueUnknownAndSelfBuild(t *testing.T) {
 			name:     "SelfBuild",
 			proposal: epbsProposalWithBid(staticBuilderIndexSelfBuild, 0, 7, 7_000_000_000),
 			config:   duplicateURLs,
-			unknown:  true,
 		},
 		{
 			name:     "SelfBuildNonZeroBid",
@@ -188,4 +187,64 @@ func epbsProposalWithoutValue(builderIndex gloas.BuilderIndex,
 	proposal.ExecutionValue = nil
 
 	return proposal
+}
+
+func TestUnmatchedBuilderStillEnforcesMinimum(t *testing.T) {
+	proposal := epbsProposalWithBid(1, 1, 0, 1_000_000_000)
+	err := validateEPBSProposalExecutionValue(proposal, &gloas.BuilderConfig{MinBid: 10}, "https://unknown.example", staticBuilderIndexSelfBuild)
+	require.ErrorIs(t, err, client.ErrInconsistentResult)
+}
+
+func TestP2PPaymentStillEnforcesMinimum(t *testing.T) {
+	proposal := epbsProposalWithBid(1, 1, 1, 2_000_000_000)
+	err := validateEPBSProposalExecutionValue(proposal, &gloas.BuilderConfig{MinBid: 10}, "", staticBuilderIndexSelfBuild)
+	require.ErrorIs(t, err, client.ErrInconsistentResult)
+}
+
+func TestEPBSProposalBidPolicies(t *testing.T) {
+	entries := []*gloas.BuilderEntry{
+		{URL: []byte("https://first.example"), MinBid: 5, MaxExecutionPayment: 2},
+		{URL: []byte("https://second.example"), MinBid: 8, MaxExecutionPayment: 9},
+	}
+	duplicate := []*gloas.BuilderEntry{
+		{URL: []byte("https://duplicate.example"), MaxExecutionPayment: 2},
+		{URL: []byte("https://duplicate.example"), MaxExecutionPayment: 9},
+	}
+	tests := []struct {
+		name                  string
+		url                   string
+		entries               []*gloas.BuilderEntry
+		value, payment, floor phase0.Gwei
+		reported              uint64
+		wantError, withheld   bool
+	}{
+		{name: "UnmatchedBelowFloor", url: "https://unknown.example", value: 1, floor: 10, wantError: true},
+		{name: "DuplicateBelowFloor", url: "https://duplicate.example", entries: duplicate, value: 1, floor: 10, wantError: true},
+		{name: "JoinedBelowFloor", url: "https://first.example;https://second.example", entries: entries, value: 1, floor: 10, wantError: true},
+		{name: "JoinedMatchesAnEntry", url: "https://first.example;https://second.example", entries: []*gloas.BuilderEntry{{URL: []byte("https://first.example;https://second.example")}}, value: 1, floor: 10, wantError: true},
+		{name: "P2PBelowFloorDespitePayment", value: 1, payment: 1, floor: 10, wantError: true},
+		{name: "UnmatchedUsesLargestCap", url: "https://unknown.example", entries: entries, value: 1, payment: 20, floor: 10, withheld: true},
+		{name: "DuplicateUsesLargestCap", url: "https://duplicate.example", entries: duplicate, value: 1, payment: 20, floor: 10, withheld: true},
+		{name: "P2PUsesLargestCap", entries: entries, value: 1, payment: 20, floor: 10, withheld: true},
+		{name: "P2PCapCannotExceedLargest", entries: entries, value: 1, payment: 20, floor: 11, wantError: true},
+		{name: "DirectUsesEntryFloorAndCap", url: "https://second.example", entries: entries, value: 1, payment: 7, floor: 100, reported: 8_000_000_000},
+		{name: "DirectDoesNotUseOtherCap", url: "https://first.example", entries: entries, value: 2, payment: 20, floor: 1, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proposal := epbsProposalWithBid(1, test.value, test.payment, test.reported)
+			err := validateEPBSProposalExecutionValue(proposal, &gloas.BuilderConfig{MinBid: test.floor, Builders: test.entries}, test.url, staticBuilderIndexSelfBuild)
+			if test.wantError {
+				require.ErrorIs(t, err, client.ErrInconsistentResult)
+				require.ErrorContains(t, err, "execution payload bid below minimum")
+				return
+			}
+			require.NoError(t, err)
+			if test.withheld {
+				require.Nil(t, proposal.ExecutionValue)
+			} else {
+				require.Equal(t, new(big.Int).SetUint64(test.reported), proposal.ExecutionValue)
+			}
+		})
+	}
 }

@@ -262,8 +262,8 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 	// which leaves the value unknown.  The consensus header is omitted here, so
 	// it must stay unknown alongside the known zero: asserting only the total
 	// would not catch a regression that defaulted an absent component to zero or
-	// wrote the execution header to the wrong field.  Headers are the sole
-	// source, so the body's own value fields are metadata and do not contribute.
+	// wrote the execution header to the wrong field.  Headers take precedence
+	// over the body's execution value.
 	t.Run("ZeroExecutionValueFromHeaders", func(t *testing.T) {
 		body, _ := epbsProposalJSONBody(t, false, validEPBSBeaconBlock())
 
@@ -477,6 +477,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 	// it as evidence that the execution bid has no value.
 	t.Run("AbsentExecutionValueIsUnknown", func(t *testing.T) {
 		body, _ := epbsProposalJSONBody(t, false, validEPBSBeaconBlock())
+		body = []byte(strings.Replace(string(body), `"execution_payload_value":"12345",`, "", 1))
 
 		response, err := s.epbsProposalFromResponse(ctx, &httpResponse{
 			statusCode:       http.StatusOK,
@@ -488,7 +489,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, response.Data.ConsensusValue)
 		require.Nil(t, response.Data.ExecutionValue)
-		require.Nil(t, response.Data.Value())
+		require.Equal(t, big.NewInt(0), response.Data.Value())
 	})
 
 	t.Run("CorruptJSON", func(t *testing.T) {
@@ -637,4 +638,25 @@ func customSpecService(ctx context.Context, t *testing.T) *Service {
 	t.Helper()
 
 	return newTestService(ctx, t, true)
+}
+
+func TestEPBSProposalJSONExecutionValueValidation(t *testing.T) {
+	tests := []struct {
+		name, value, message string
+	}{
+		{name: "Negative", value: `"-1"`, message: "negative"},
+		{name: "NotString", value: `123`, message: "not a string"},
+		{name: "TooLong", value: `"` + strings.Repeat("9", 41) + `"`, message: "more than"},
+		{name: "Invalid", value: `"abc"`, message: "not a valid integer"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, _ := epbsProposalJSONBody(t, false, validEPBSBeaconBlock())
+			body = []byte(strings.Replace(string(body), `"execution_payload_value":"12345"`, `"execution_payload_value":`+test.value, 1))
+			_, err := (&Service{}).epbsProposalFromResponse(context.Background(), &httpResponse{
+				contentType: ContentTypeJSON, consensusVersion: spec.DataVersionGloas, body: body,
+			})
+			require.ErrorContains(t, err, test.message)
+		})
+	}
 }
