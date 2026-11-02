@@ -16,6 +16,7 @@ package testclients_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	consensusclient "github.com/attestantio/go-eth2-client"
 	"github.com/attestantio/go-eth2-client/api"
@@ -120,4 +121,27 @@ func TestMaybeError(t *testing.T) {
 	// Expect approximately 90% of the requests to have errored.
 	require.LessOrEqual(t, errors, 90500)
 	require.GreaterOrEqual(t, errors, 89500)
+}
+
+func TestBuildersWrappers(t *testing.T) {
+	ctx := context.Background()
+	mockService, err := mock.New(ctx)
+	require.NoError(t, err)
+	expected := &api.Response[[]*apiv1.Builder]{Data: []*apiv1.Builder{{Index: 3}}}
+	opts := &api.BuildersOpts{State: "head", IDs: []string{"3"}}
+	mockService.BuildersFunc = func(_ context.Context, got *api.BuildersOpts) (*api.Response[[]*apiv1.Builder], error) {
+		require.Equal(t, opts, got)
+		return expected, nil
+	}
+	erroring, err := testclients.NewErroring(ctx, 0, mockService)
+	require.NoError(t, err)
+	sleepy, err := testclients.NewSleepy(ctx, 0, time.Millisecond, mockService)
+	require.NoError(t, err)
+	for _, service := range []consensusclient.Service{erroring, sleepy} {
+		provider, ok := service.(consensusclient.BuildersProvider)
+		require.True(t, ok)
+		result, err := provider.Builders(ctx, opts)
+		require.NoError(t, err)
+		require.Same(t, expected, result)
+	}
 }

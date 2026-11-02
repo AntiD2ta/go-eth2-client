@@ -59,24 +59,46 @@ type builderYAML struct {
 
 // MarshalJSON implements json.Marshaler.
 func (v *Builder) MarshalJSON() ([]byte, error) {
-	return json.Marshal(&builderJSON{
+	return json.Marshal(&struct {
+		*builderJSON
+
+		Version uint8 `json:"version,string"`
+	}{builderJSON: &builderJSON{
 		PublicKey:         fmt.Sprintf("%#x", v.PublicKey),
 		Version:           v.Version,
 		ExecutionAddress:  v.ExecutionAddress.String(),
 		Balance:           fmt.Sprintf("%d", v.Balance),
 		DepositEpoch:      fmt.Sprintf("%d", v.DepositEpoch),
 		WithdrawableEpoch: fmt.Sprintf("%d", v.WithdrawableEpoch),
-	})
+	}, Version: v.Version})
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *Builder) UnmarshalJSON(input []byte) error {
-	var builderJSON builderJSON
-	if err := json.Unmarshal(input, &builderJSON); err != nil {
+	var builderData builderJSON
+	decoded := struct {
+		*builderJSON
+
+		Version json.RawMessage `json:"version"`
+	}{builderJSON: &builderData}
+	if err := json.Unmarshal(input, &decoded); err != nil {
 		return errors.Wrap(err, "invalid JSON")
 	}
+	if len(decoded.Version) > 0 && string(decoded.Version) != "null" {
+		version := string(decoded.Version)
+		if decoded.Version[0] == '"' {
+			if err := json.Unmarshal(decoded.Version, &version); err != nil {
+				return errors.Wrap(err, "invalid version")
+			}
+		}
+		parsed, err := strconv.ParseUint(version, 10, 8)
+		if err != nil {
+			return errors.Wrap(err, "invalid version")
+		}
+		builderData.Version = uint8(parsed)
+	}
 
-	return v.unpack(&builderJSON)
+	return v.unpack(&builderData)
 }
 
 func (v *Builder) unpack(builderJSON *builderJSON) error {
