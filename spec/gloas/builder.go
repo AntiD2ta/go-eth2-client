@@ -39,12 +39,33 @@ type Builder struct {
 
 // builderJSON is the spec representation of the struct.
 type builderJSON struct {
-	PublicKey         string `json:"pubkey"`
-	Version           uint8  `json:"version"`
-	ExecutionAddress  string `json:"execution_address"`
-	Balance           string `json:"balance"`
-	DepositEpoch      string `json:"deposit_epoch"`
-	WithdrawableEpoch string `json:"withdrawable_epoch"`
+	PublicKey         string         `json:"pubkey"`
+	Version           builderVersion `json:"version"`
+	ExecutionAddress  string         `json:"execution_address"`
+	Balance           string         `json:"balance"`
+	DepositEpoch      string         `json:"deposit_epoch"`
+	WithdrawableEpoch string         `json:"withdrawable_epoch"`
+}
+
+// builderVersion accepts both the API string and legacy numeric JSON forms.
+type builderVersion uint8
+
+func (v builderVersion) MarshalJSON() ([]byte, error) {
+	return json.Marshal(strconv.FormatUint(uint64(v), 10))
+}
+
+func (v *builderVersion) UnmarshalJSON(input []byte) error {
+	var n json.Number
+	if err := json.Unmarshal(input, &n); err != nil {
+		return err
+	}
+	value, err := strconv.ParseUint(string(n), 10, 8)
+	if err != nil {
+		return err
+	}
+	*v = builderVersion(value)
+
+	return nil
 }
 
 // builderYAML is the spec representation of the struct.
@@ -61,7 +82,7 @@ type builderYAML struct {
 func (v *Builder) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&builderJSON{
 		PublicKey:         fmt.Sprintf("%#x", v.PublicKey),
-		Version:           v.Version,
+		Version:           builderVersion(v.Version),
 		ExecutionAddress:  v.ExecutionAddress.String(),
 		Balance:           fmt.Sprintf("%d", v.Balance),
 		DepositEpoch:      fmt.Sprintf("%d", v.DepositEpoch),
@@ -95,7 +116,7 @@ func (v *Builder) unpack(builderJSON *builderJSON) error {
 
 	copy(v.PublicKey[:], publicKey)
 
-	v.Version = builderJSON.Version
+	v.Version = uint8(builderJSON.Version)
 
 	if builderJSON.ExecutionAddress == "" {
 		return errors.New("execution address missing")
@@ -171,13 +192,16 @@ func (v *Builder) MarshalYAML() ([]byte, error) {
 
 // UnmarshalYAML implements yaml.Unmarshaler.
 func (v *Builder) UnmarshalYAML(input []byte) error {
-	// We unmarshal to the JSON struct to save on duplicate code.
-	var builderJSON builderJSON
-	if err := yaml.Unmarshal(input, &builderJSON); err != nil {
+	var value builderYAML
+	if err := yaml.Unmarshal(input, &value); err != nil {
 		return err
 	}
 
-	return v.unpack(&builderJSON)
+	return v.unpack(&builderJSON{
+		PublicKey: value.PublicKey, Version: builderVersion(value.Version),
+		ExecutionAddress: value.ExecutionAddress, Balance: value.Balance,
+		DepositEpoch: value.DepositEpoch, WithdrawableEpoch: value.WithdrawableEpoch,
+	})
 }
 
 // String returns a string version of the structure.
