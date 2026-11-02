@@ -83,6 +83,12 @@ func TestValidateEPBSProposalExecutionValueUnknownAndSelfBuild(t *testing.T) {
 			err:      true,
 		},
 		{
+			name:     "P2PPaymentBelowMinimum",
+			proposal: epbsProposalWithBid(1, 1, 1, 2_000_000_000),
+			config:   &gloas.BuilderConfig{MinBid: 10},
+			err:      true,
+		},
+		{
 			name:     "P2PPaymentUncheckable",
 			proposal: epbsProposalWithBid(1, 10, 3, 13_000_000_000),
 			config:   &gloas.BuilderConfig{MinBid: 10},
@@ -99,7 +105,6 @@ func TestValidateEPBSProposalExecutionValueUnknownAndSelfBuild(t *testing.T) {
 			name:     "SelfBuild",
 			proposal: epbsProposalWithBid(staticBuilderIndexSelfBuild, 0, 7, 7_000_000_000),
 			config:   duplicateURLs,
-			unknown:  true,
 		},
 		{
 			name:     "SelfBuildNonZeroBid",

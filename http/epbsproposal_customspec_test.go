@@ -187,6 +187,7 @@ func TestEPBSProposalCustomSpec(t *testing.T) {
 			w.Header().Set("Eth-Consensus-Version", "gloas")
 			w.Header().Set("Eth-Execution-Payload-Included", "true")
 			w.Header().Set("Eth-Builder-Url", "https://builder.example")
+			w.Header().Set("Eth-Execution-Payload-Value", "123")
 			_, err := w.Write(encoded)
 			require.NoError(t, err)
 		default:
@@ -203,6 +204,16 @@ func TestEPBSProposalCustomSpec(t *testing.T) {
 	require.NoError(t, err)
 
 	includePayload := true
+	builderConfig.MinBid = 1
+	_, err = service.(client.EPBSProposalProvider).EPBSProposal(ctx, &api.EPBSProposalOpts{
+		Slot:           slot,
+		RandaoReveal:   randaoReveal,
+		Graffiti:       graffiti,
+		BuilderConfig:  builderConfig,
+		IncludePayload: &includePayload,
+	})
+	require.ErrorIs(t, err, client.ErrInconsistentResult)
+	builderConfig.MinBid = 0
 	response, err := service.(client.EPBSProposalProvider).EPBSProposal(ctx, &api.EPBSProposalOpts{
 		Slot:           slot,
 		RandaoReveal:   randaoReveal,
@@ -216,6 +227,7 @@ func TestEPBSProposalCustomSpec(t *testing.T) {
 	require.NotNil(t, response.Data.BuilderIndex)
 	require.Equal(t, gloas.BuilderIndex(3), *response.Data.BuilderIndex)
 	require.Nil(t, response.Data.ExecutionValue)
+	require.NotContains(t, response.Metadata, "Eth-Execution-Payload-Value")
 	require.True(t, response.Data.ExecutionPayloadIncluded)
 
 	gotBodyRoot, err := response.Data.BodyRoot()
