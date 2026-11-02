@@ -138,6 +138,13 @@ func (s *Service) EPBSProposal(ctx context.Context,
 	if err := validateEPBSProposalExecutionValue(response.Data, opts.BuilderConfig, builderURL, selfBuildIndex); err != nil {
 		return nil, err
 	}
+	if response.Data.ExecutionValue == nil {
+		for key := range response.Metadata {
+			if strings.EqualFold(key, "Eth-Execution-Payload-Value") || strings.EqualFold(key, "execution_payload_value") {
+				delete(response.Metadata, key)
+			}
+		}
+	}
 
 	return response, nil
 }
@@ -223,10 +230,9 @@ func (s *Service) builderIndexSelfBuild(ctx context.Context) (gloas.BuilderIndex
 
 // validateEPBSProposalExecutionValue checks the bid a proposal commits to against
 // the policy that was requested, and checks the execution value the node reported
-// against the bid that is signed in the block.  A value the block gives no way to
-// check -- because the winning builder cannot be identified, or the bid is
-// self-built -- is cleared rather than passed on, so a caller ranking proposals
-// never treats an unverified number as a verified one.
+// against the bid that is signed in the block.  Values from unattributable
+// builder bids are withheld; self-build values are retained because the node's
+// estimate is the only available signal.
 func validateEPBSProposalExecutionValue(proposal *api.VersionedEPBSProposal,
 	config *gloas.BuilderConfig,
 	builderURL string,
@@ -245,49 +251,36 @@ func validateEPBSProposalExecutionValue(proposal *api.VersionedEPBSProposal,
 		if bid.Value != 0 {
 			return errors.Join(errors.New("self-built execution payload bid has non-zero value"), client.ErrInconsistentResult)
 		}
-		proposal.ExecutionValue = nil
-
 		return nil
 	}
 
-	policy := config
-	if builderURL != "" {
-		entry := builderEntryForURL(config, builderURL)
-		if entry == nil {
-			proposal.ExecutionValue = nil
-
-			return nil
-		}
-
-		// A builder-API bid is judged against the entry it was solicited
-		// under, not the config-wide minimum, which gates p2p bids only.
-		policy = &gloas.BuilderConfig{MinBid: entry.MinBid, Builders: []*gloas.BuilderEntry{entry}}
-	} else if bid.ExecutionPayment != 0 {
-		// No builder URL means p2p or self-build.  The cap a p2p payment
-		// counts up to is the maximum over the configured entries whose
-		// pubkeys include the bidding builder's, and the block carries no
-		// pubkey to resolve the builder index against, so the payment -- and
-		// with it the value -- cannot be checked here.
-		proposal.ExecutionValue = nil
-
-		return nil
-	}
-
-	// The proposer's take counts the execution payment only up to the cap of
-	// the entry the bid was solicited under.  A p2p bid has no such entry, and
-	// the payment check above is what makes a zero cap right for it.
+	minBid := config.MinBid
 	maxPayment := phase0.Gwei(0)
-	if len(policy.Builders) == 1 {
-		maxPayment = policy.Builders[0].MaxExecutionPayment
+	var entry *gloas.BuilderEntry
+	if builderURL != "" && !strings.Contains(builderURL, ";") {
+		entry = builderEntryForURL(config, builderURL)
+	}
+	unattributable := entry == nil && (builderURL != "" || bid.ExecutionPayment != 0)
+	if entry != nil {
+		minBid = entry.MinBid
+		maxPayment = entry.MaxExecutionPayment
+	} else {
+		// The block has no pubkey to resolve the applicable P2P payment cap.
+		for _, candidate := range config.Builders {
+			maxPayment = max(maxPayment, candidate.MaxExecutionPayment)
+		}
 	}
 	payment := min(bid.ExecutionPayment, maxPayment)
 
 	value := new(big.Int).SetUint64(uint64(bid.Value))
 	total := new(big.Int).Add(value, new(big.Int).SetUint64(uint64(payment)))
-	if total.Cmp(new(big.Int).SetUint64(uint64(policy.MinBid))) < 0 {
+	if total.Cmp(new(big.Int).SetUint64(uint64(minBid))) < 0 {
 		return errors.Join(errors.New("execution payload bid below minimum"), client.ErrInconsistentResult)
 	}
 
+	if unattributable {
+		proposal.ExecutionValue = nil
+	}
 	if proposal.ExecutionValue == nil {
 		return nil
 	}
