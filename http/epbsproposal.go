@@ -40,13 +40,16 @@ import (
 // generous room for any real value while keeping a hostile one cheap to reject.
 const maxProposalValueDigits = 40
 
-// maxEPBSResponseSize bounds the bodies of the ePBS fetch endpoints that pass
-// it explicitly.  Those bodies are an execution payload envelope or a
-// payload-attestation datum or pool, so 64MiB is orders of magnitude above any
-// legitimate response while capping a hostile or runaway one.  Block production
-// is the one ePBS endpoint whose response can be far larger, and it passes its
-// own limit below rather than raising this one for everybody.
+// maxEPBSResponseSize bounds, in either encoding, the bodies of the ePBS fetch
+// endpoints that pass epbsResponseLimit.  Those bodies are an execution payload
+// envelope or a payload-attestation datum or pool, so 64MiB is orders of
+// magnitude above any legitimate response while capping a hostile or runaway
+// one.  Block production is the one ePBS endpoint whose response can be far
+// larger, and it passes its own limit below rather than raising this one for
+// everybody.
 const maxEPBSResponseSize = 64 * 1024 * 1024
+
+var epbsResponseLimit = responseLimit{ssz: maxEPBSResponseSize, json: maxEPBSResponseSize}
 
 // maxEPBSProposalResponseSize bounds a full SSZ payload-included block
 // production response.  It is an allocation budget, not the protocol's static
@@ -100,11 +103,6 @@ func (s *Service) EPBSProposal(ctx context.Context,
 		"Eth-Consensus-Version": spec.DataVersionGloas.String(),
 	}
 
-	responseLimit := maxEPBSProposalResponseSize
-	if contentType == ContentTypeJSON {
-		responseLimit = maxEPBSProposalJSONResponseSize
-	}
-
 	httpResponse, err := s.postWithResponseLimit(
 		ctx,
 		endpoint,
@@ -113,7 +111,7 @@ func (s *Service) EPBSProposal(ctx context.Context,
 		bytes.NewReader(body),
 		contentType,
 		headers,
-		responseLimit,
+		responseLimit{ssz: maxEPBSProposalResponseSize, json: maxEPBSProposalJSONResponseSize},
 	)
 	if err != nil {
 		return nil, errors.Join(errors.New("failed to request epbs beacon block proposal"), err)
