@@ -24,6 +24,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/electra"
+	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 )
 
@@ -245,6 +246,11 @@ type BlockRewardsProvider interface {
 		*api.Response[*apiv1.BlockRewards],
 		error,
 	)
+}
+
+// BuildersProvider provides the builders in a beacon state.
+type BuildersProvider interface {
+	Builders(ctx context.Context, opts *api.BuildersOpts) (*api.Response[map[gloas.BuilderIndex]*apiv1.Builder], error)
 }
 
 // DepositContractProvider is the interface for providing details about the deposit contract.
