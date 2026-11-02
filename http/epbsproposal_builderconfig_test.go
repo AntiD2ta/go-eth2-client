@@ -178,3 +178,100 @@ func TestEPBSProposalRejectsNonUTF8BuilderURL(t *testing.T) {
 	require.ErrorContains(t, err, "builder 0 has invalid URL")
 	require.Zero(t, blockRequests.Load())
 }
+
+func TestEPBSProposalRejectsOversizedDeclaredJSONResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/eth/v1/node/syncing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+		case "/eth/v1/node/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+		case "/eth/v4/validator/blocks/123":
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "536870913")
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service, err := eth2http.New(context.Background(),
+		eth2http.WithAddress(server.URL),
+		eth2http.WithAllowDelayedStart(true),
+		eth2http.WithLogLevel(zerolog.Disabled),
+	)
+	require.NoError(t, err)
+	includePayload := true
+	_, err = service.(client.EPBSProposalProvider).EPBSProposal(context.Background(), &api.EPBSProposalOpts{
+		Slot: 123, BuilderConfig: validEPBSBuilderConfig(), IncludePayload: &includePayload,
+	})
+	require.ErrorContains(t, err, "response body exceeds 536870912 bytes")
+}
+
+func TestSignedEnvelopeRejectsOversizedDeclaredResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/eth/v1/node/syncing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+		case "/eth/v1/node/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+		case "/eth/v1/beacon/execution_payload_envelopes/head":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Length", "67108865")
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service, err := eth2http.New(context.Background(), eth2http.WithAddress(server.URL),
+		eth2http.WithAllowDelayedStart(true), eth2http.WithLogLevel(zerolog.Disabled))
+	require.NoError(t, err)
+	_, err = service.(client.ExecutionPayloadProvider).SignedExecutionPayloadEnvelope(context.Background(),
+		&api.SignedExecutionPayloadEnvelopeOpts{Block: "head"})
+	require.ErrorContains(t, err, "response body exceeds 67108864 bytes")
+}
+
+func TestEPBSProposalSSZRequestAllowsLargerDeclaredJSON(t *testing.T) {
+	accept := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/eth/v1/node/syncing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+		case "/eth/v1/node/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+		case "/eth/v4/validator/blocks/123":
+			accept <- r.Header.Get("Accept")
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "268435457")
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service, err := eth2http.New(context.Background(), eth2http.WithAddress(server.URL),
+		eth2http.WithAllowDelayedStart(true), eth2http.WithLogLevel(zerolog.Disabled))
+	require.NoError(t, err)
+	includePayload := true
+	_, err = service.(client.EPBSProposalProvider).EPBSProposal(context.Background(), &api.EPBSProposalOpts{
+		Slot: 123, BuilderConfig: validEPBSBuilderConfig(), IncludePayload: &includePayload,
+	})
+	select {
+	case header := <-accept:
+		require.Equal(t, "application/octet-stream", header)
+	default:
+		t.Fatal("proposal request did not reach the server")
+	}
+	// The truncated response is read instead of being rejected at the smaller SSZ limit.
+	require.ErrorContains(t, err, "unexpected EOF")
+}

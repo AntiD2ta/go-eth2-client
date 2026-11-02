@@ -47,7 +47,7 @@ func TestReadResponseBody(t *testing.T) {
 
 // TestEPBSProposalResponseLimitsAreSurvivable pins the property that makes the
 // block-production limits a defence rather than a comment.  readResponseBody
-// reaches its length check only after io.ReadAll has buffered the whole body,
+// reaches its length check only after io.ReadAll has buffered up to the limit,
 // and ReadAll grows its buffer geometrically, so peak allocation is close to
 // twice the limit.  A limit taken from the protocol's theoretical maximum
 // (~2GiB of SSZ, ~5GiB of JSON hex) is therefore never reached -- the process
