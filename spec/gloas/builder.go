@@ -40,7 +40,7 @@ type Builder struct {
 // builderJSON is the spec representation of the struct.
 type builderJSON struct {
 	PublicKey         string `json:"pubkey"`
-	Version           uint8  `json:"version"`
+	Version           uint8  `json:"version,string"`
 	ExecutionAddress  string `json:"execution_address"`
 	Balance           string `json:"balance"`
 	DepositEpoch      string `json:"deposit_epoch"`
@@ -71,12 +71,25 @@ func (v *Builder) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *Builder) UnmarshalJSON(input []byte) error {
-	var builderJSON builderJSON
-	if err := json.Unmarshal(input, &builderJSON); err != nil {
+	var decoded builderJSON
+	aux := struct {
+		*builderJSON
+
+		Version json.RawMessage `json:"version"`
+	}{builderJSON: &decoded}
+	if err := json.Unmarshal(input, &aux); err != nil {
 		return errors.Wrap(err, "invalid JSON")
 	}
+	if len(aux.Version) > 0 {
+		version := strings.Trim(string(aux.Version), `"`)
+		parsed, err := strconv.ParseUint(version, 10, 8)
+		if err != nil {
+			return errors.Wrap(err, "invalid value for version")
+		}
+		decoded.Version = uint8(parsed)
+	}
 
-	return v.unpack(&builderJSON)
+	return v.unpack(&decoded)
 }
 
 func (v *Builder) unpack(builderJSON *builderJSON) error {
