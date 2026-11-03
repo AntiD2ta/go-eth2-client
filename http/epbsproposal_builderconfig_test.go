@@ -178,3 +178,75 @@ func TestEPBSProposalRejectsNonUTF8BuilderURL(t *testing.T) {
 	require.ErrorContains(t, err, "builder 0 has invalid URL")
 	require.Zero(t, blockRequests.Load())
 }
+
+func TestEPBSProposalRejectsOversizedDeclaredJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/eth/v1/node/syncing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+		case "/eth/v1/node/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+		case "/eth/v4/validator/blocks/123":
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "536870913")
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, err := eth2http.New(ctx,
+		eth2http.WithAddress(server.URL),
+		eth2http.WithAllowDelayedStart(true),
+		eth2http.WithLogLevel(zerolog.Disabled),
+	)
+	require.NoError(t, err)
+	includePayload := true
+	_, err = service.(client.EPBSProposalProvider).EPBSProposal(context.Background(), &api.EPBSProposalOpts{
+		Slot: 123, BuilderConfig: validEPBSBuilderConfig(), IncludePayload: &includePayload,
+	})
+	require.ErrorContains(t, err, "response body exceeds 536870912 bytes")
+}
+
+func TestEPBSProposalSSZRequestUsesJSONResponseLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/eth/v1/node/syncing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+		case "/eth/v1/node/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+		case "/eth/v4/validator/blocks/123":
+			if r.Header.Get("Accept") != "application/octet-stream" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "268435457")
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, err := eth2http.New(ctx,
+		eth2http.WithAddress(server.URL),
+		eth2http.WithAllowDelayedStart(true),
+		eth2http.WithLogLevel(zerolog.Disabled),
+	)
+	require.NoError(t, err)
+	includePayload := true
+	_, err = service.(client.EPBSProposalProvider).EPBSProposal(context.Background(), &api.EPBSProposalOpts{
+		Slot: 123, BuilderConfig: validEPBSBuilderConfig(), IncludePayload: &includePayload,
+	})
+	require.ErrorContains(t, err, "unexpected EOF")
+}
