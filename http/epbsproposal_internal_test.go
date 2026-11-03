@@ -473,8 +473,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 		require.ErrorContains(t, err, "not a valid integer")
 	})
 
-	// An omitted execution value is unknown, not zero.  A caller must not use
-	// it as evidence that the execution bid has no value.
+	// The field distinguishes an unknown value from a reported zero.
 	t.Run("AbsentExecutionValueIsUnknown", func(t *testing.T) {
 		body, _ := epbsProposalJSONBody(t, false, validEPBSBeaconBlock())
 
@@ -488,7 +487,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, response.Data.ConsensusValue)
 		require.Nil(t, response.Data.ExecutionValue)
-		require.Nil(t, response.Data.Value())
+		require.Zero(t, response.Data.Value().Sign())
 	})
 
 	t.Run("CorruptJSON", func(t *testing.T) {

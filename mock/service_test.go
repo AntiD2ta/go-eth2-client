@@ -47,3 +47,22 @@ func testSpec(ctx context.Context, opts *api.SpecOpts) (*api.Response[map[string
 		Metadata: make(map[string]any),
 	}, nil
 }
+
+func TestConcurrentNewAndCancel(t *testing.T) {
+	const count = 32
+	start := make(chan struct{})
+	results := make(chan error, count)
+	for range count {
+		go func() {
+			<-start
+			ctx, cancel := context.WithCancel(context.Background())
+			_, err := mock.New(ctx)
+			cancel()
+			results <- err
+		}()
+	}
+	close(start)
+	for range count {
+		require.NoError(t, <-results)
+	}
+}

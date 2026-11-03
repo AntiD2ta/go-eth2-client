@@ -24,7 +24,6 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/pkg/errors"
-	"github.com/rs/zerolog"
 	zerologger "github.com/rs/zerolog/log"
 )
 
@@ -92,9 +91,6 @@ type Service struct {
 	VoluntaryExitPoolFunc              func(context.Context, *api.VoluntaryExitPoolOpts) (*api.Response[[]*phase0.SignedVoluntaryExit], error)
 }
 
-// log is a service-wide logger.
-var log zerolog.Logger
-
 // New creates a new Ethereum 2 client service, mocking connections.
 func New(ctx context.Context, params ...Parameter) (*Service, error) {
 	parameters, err := parseAndCheckParameters(params...)
@@ -103,7 +99,7 @@ func New(ctx context.Context, params ...Parameter) (*Service, error) {
 	}
 
 	// Set logging.
-	log = zerologger.With().Str("service", "client").Str("impl", "mock").Logger()
+	log := zerologger.With().Str("service", "client").Str("impl", "mock").Logger()
 	if parameters.logLevel != log.GetLevel() {
 		log = log.Level(parameters.logLevel)
 	}
