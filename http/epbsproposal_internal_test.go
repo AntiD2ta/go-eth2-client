@@ -488,7 +488,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, response.Data.ConsensusValue)
 		require.Nil(t, response.Data.ExecutionValue)
-		require.Nil(t, response.Data.Value())
+		require.Equal(t, big.NewInt(0), response.Data.Value())
 	})
 
 	t.Run("CorruptJSON", func(t *testing.T) {
