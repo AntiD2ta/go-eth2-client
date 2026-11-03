@@ -178,3 +178,58 @@ func TestEPBSProposalRejectsNonUTF8BuilderURL(t *testing.T) {
 	require.ErrorContains(t, err, "builder 0 has invalid URL")
 	require.Zero(t, blockRequests.Load())
 }
+
+func TestEPBSProposalResponseEncodingLimits(t *testing.T) {
+	tests := []struct {
+		name        string
+		requestJSON bool
+		contentType string
+		length      string
+		err         string
+	}{
+		{name: "SSZRequestJSONFallback", contentType: "application/json", length: "268435457", err: "unexpected EOF"},
+		{name: "JSONRequestSSZResponse", requestJSON: true, contentType: "application/octet-stream", length: "268435457", err: "response body exceeds 268435456 bytes"},
+		{name: "SSZRequestJSONTooLarge", contentType: "application/json", length: "536870913", err: "response body exceeds 536870912 bytes"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/eth/v1/node/syncing":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+				case "/eth/v1/node/version":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+				case "/eth/v4/validator/blocks/123":
+					if test.requestJSON {
+						require.Equal(t, "application/json", r.Header.Get("Accept"))
+					} else {
+						require.Equal(t, "application/octet-stream", r.Header.Get("Accept"))
+					}
+					w.Header().Set("Content-Type", test.contentType)
+					w.Header().Set("Content-Length", test.length)
+					_, _ = w.Write([]byte("{"))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			service, err := eth2http.New(context.Background(),
+				eth2http.WithAddress(server.URL),
+				eth2http.WithAllowDelayedStart(true),
+				eth2http.WithEnforceJSON(test.requestJSON),
+				eth2http.WithLogLevel(zerolog.Disabled),
+			)
+			require.NoError(t, err)
+			includePayload := true
+			_, err = service.(client.EPBSProposalProvider).EPBSProposal(context.Background(), &api.EPBSProposalOpts{
+				Slot:           123,
+				BuilderConfig:  validEPBSBuilderConfig(),
+				IncludePayload: &includePayload,
+			})
+			require.ErrorContains(t, err, test.err)
+		})
+	}
+}
