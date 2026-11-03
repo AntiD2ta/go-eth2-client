@@ -110,7 +110,9 @@ func TestEPBSProposalJSONResponseAcceptsBareBuilderWin(t *testing.T) {
 			require.Equal(t, "application/json", r.Header.Get("Accept"))
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Eth-Consensus-Version", "gloas")
-			_, err := w.Write(append([]byte(`{"version":"gloas","execution_payload_included":false,"data":`), append(block, '}')...))
+			w.Header().Set("Eth-Builder-Url", "https://unknown.example")
+			w.Header().Set("Eth-Execution-Payload-Value", "123")
+			_, err := w.Write(append([]byte(`{"version":"gloas","execution_payload_value":"456","execution_payload_included":false,"data":`), append(block, '}')...))
 			require.NoError(t, err)
 		default:
 			http.NotFound(w, r)
@@ -136,6 +138,10 @@ func TestEPBSProposalJSONResponseAcceptsBareBuilderWin(t *testing.T) {
 	require.False(t, response.Data.ExecutionPayloadIncluded)
 	require.NotNil(t, response.Data.Gloas)
 	require.Nil(t, response.Data.GloasContents)
+	require.Nil(t, response.Data.ExecutionValue)
+	require.NotContains(t, response.Metadata, "Eth-Execution-Payload-Value")
+	require.NotContains(t, response.Metadata, "execution_payload_value")
+	require.Equal(t, "https://unknown.example", response.Metadata["Eth-Builder-Url"])
 }
 
 func TestEPBSProposalRejectsNonUTF8BuilderURL(t *testing.T) {

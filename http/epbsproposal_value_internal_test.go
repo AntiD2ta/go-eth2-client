@@ -28,7 +28,7 @@ import (
 func TestValidateEPBSProposalExecutionValueRejectsMismatchedP2PHeader(t *testing.T) {
 	proposal := epbsProposalWithBid(1, 10, 0, 11_000_000_000)
 
-	err := validateEPBSProposalExecutionValue(proposal, &gloas.BuilderConfig{MinBid: 10}, "", staticBuilderIndexSelfBuild)
+	err := validateEPBSProposalExecutionValue(proposal, &gloas.BuilderConfig{MinBid: 10}, "", staticBuilderIndexSelfBuild, nil)
 	require.Error(t, err)
 	require.ErrorIs(t, err, client.ErrInconsistentResult)
 }
@@ -36,7 +36,7 @@ func TestValidateEPBSProposalExecutionValueRejectsMismatchedP2PHeader(t *testing
 func TestValidateEPBSProposalExecutionValueRejectsP2PBelowMinimum(t *testing.T) {
 	proposal := epbsProposalWithBid(1, 9, 0, 9_000_000_000)
 
-	err := validateEPBSProposalExecutionValue(proposal, &gloas.BuilderConfig{MinBid: 10}, "", staticBuilderIndexSelfBuild)
+	err := validateEPBSProposalExecutionValue(proposal, &gloas.BuilderConfig{MinBid: 10}, "", staticBuilderIndexSelfBuild, nil)
 	require.ErrorIs(t, err, client.ErrInconsistentResult)
 }
 
@@ -48,7 +48,7 @@ func TestValidateEPBSProposalExecutionValueRejectsMismatchedDirectHeader(t *test
 		MinBid:              12,
 	}}}
 
-	err := validateEPBSProposalExecutionValue(proposal, config, "https://builder.example", staticBuilderIndexSelfBuild)
+	err := validateEPBSProposalExecutionValue(proposal, config, "https://builder.example", staticBuilderIndexSelfBuild, nil)
 	require.ErrorIs(t, err, client.ErrInconsistentResult)
 }
 
@@ -99,7 +99,6 @@ func TestValidateEPBSProposalExecutionValueUnknownAndSelfBuild(t *testing.T) {
 			name:     "SelfBuild",
 			proposal: epbsProposalWithBid(staticBuilderIndexSelfBuild, 0, 7, 7_000_000_000),
 			config:   duplicateURLs,
-			unknown:  true,
 		},
 		{
 			name:     "SelfBuildNonZeroBid",
@@ -145,7 +144,7 @@ func TestValidateEPBSProposalExecutionValueUnknownAndSelfBuild(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			value := test.proposal.ExecutionValue
-			err := validateEPBSProposalExecutionValue(test.proposal, test.config, test.url, staticBuilderIndexSelfBuild)
+			err := validateEPBSProposalExecutionValue(test.proposal, test.config, test.url, staticBuilderIndexSelfBuild, nil)
 			if test.err {
 				require.ErrorIs(t, err, client.ErrInconsistentResult)
 
