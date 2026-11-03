@@ -54,6 +54,8 @@ var (
 	_ consensusclient.AttesterDutiesProvider                = (*Sleepy)(nil)
 	_ consensusclient.BlockRewardsProvider                  = (*Erroring)(nil)
 	_ consensusclient.BlockRewardsProvider                  = (*Sleepy)(nil)
+	_ consensusclient.BuildersProvider                      = (*Erroring)(nil)
+	_ consensusclient.BuildersProvider                      = (*Sleepy)(nil)
 	_ consensusclient.DepositContractProvider               = (*Erroring)(nil)
 	_ consensusclient.SyncCommitteeDutiesProvider           = (*Erroring)(nil)
 	_ consensusclient.SyncCommitteeMessagesSubmitter        = (*Erroring)(nil)

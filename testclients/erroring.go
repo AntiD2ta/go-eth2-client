@@ -1270,3 +1270,16 @@ func (s *Erroring) SubmitPayloadAttestationMessages(ctx context.Context, opts *a
 
 	return next.SubmitPayloadAttestationMessages(ctx, opts)
 }
+
+// Builders returns builders for a state.
+func (s *Erroring) Builders(ctx context.Context, opts *api.BuildersOpts) (*api.Response[[]*apiv1.Builder], error) {
+	if err := s.maybeError(ctx); err != nil {
+		return nil, err
+	}
+	next, ok := s.next.(consensusclient.BuildersProvider)
+	if !ok {
+		return nil, fmt.Errorf("%s@%s does not support this call", s.next.Name(), s.next.Address())
+	}
+
+	return next.Builders(ctx, opts)
+}

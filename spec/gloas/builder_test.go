@@ -15,6 +15,7 @@ package gloas_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/attestantio/go-eth2-client/spec/bellatrix"
@@ -71,4 +72,32 @@ func TestBuilderVersionYAML(t *testing.T) {
 	var decoded gloas.Builder
 	require.NoError(t, decoded.UnmarshalYAML(data))
 	require.Equal(t, builder, &decoded)
+}
+
+func TestBuilderVersionJSONEncodings(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name    string
+		version string
+		valid   bool
+	}{
+		{name: "String", version: `"1"`, valid: true},
+		{name: "LegacyNumber", version: `1`, valid: true},
+		{name: "Overflow", version: `"256"`},
+		{name: "Invalid", version: `"bad"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := strings.Replace(string(data), `"version":"1"`, `"version":`+test.version, 1)
+			var decoded gloas.Builder
+			err := json.Unmarshal([]byte(input), &decoded)
+			if !test.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, builder, &decoded)
+		})
+	}
 }

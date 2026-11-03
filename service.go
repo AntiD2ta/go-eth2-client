@@ -247,6 +247,12 @@ type BlockRewardsProvider interface {
 	)
 }
 
+// BuildersProvider provides builder information from a state.
+type BuildersProvider interface {
+	// Builders returns builders for the given options.
+	Builders(ctx context.Context, opts *api.BuildersOpts) (*api.Response[[]*apiv1.Builder], error)
+}
+
 // DepositContractProvider is the interface for providing details about the deposit contract.
 type DepositContractProvider interface {
 	// DepositContract provides details of the execution deposit contract for the chain.
