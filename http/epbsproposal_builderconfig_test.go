@@ -16,8 +16,11 @@ package http_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -177,4 +180,170 @@ func TestEPBSProposalRejectsNonUTF8BuilderURL(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "builder 0 has invalid URL")
 	require.Zero(t, blockRequests.Load())
+}
+
+func TestEPBSProposalUnmatchedBuilderCannotBypassMinimum(t *testing.T) {
+	_, err := fetchEPBSProposalBid(t, &gloas.BuilderConfig{MinBid: 10}, []string{"https://unknown.example"}, &gloas.ExecutionPayloadBid{Value: 1}, false)
+	require.ErrorIs(t, err, client.ErrInconsistentResult)
+}
+
+func TestEPBSProposalP2PPaymentCannotBypassMinimum(t *testing.T) {
+	_, err := fetchEPBSProposalBid(t, &gloas.BuilderConfig{MinBid: 10}, nil, &gloas.ExecutionPayloadBid{Value: 1, ExecutionPayment: 1}, false)
+	require.ErrorIs(t, err, client.ErrInconsistentResult)
+}
+
+func fetchEPBSProposalBid(t *testing.T, config *gloas.BuilderConfig, urls []string, bid *gloas.ExecutionPayloadBid, useSSZ bool) (*api.Response[*api.VersionedEPBSProposal], error) {
+	t.Helper()
+	mockService, err := mock.New(context.Background())
+	require.NoError(t, err)
+	includePayload := false
+	mockResponse, err := mockService.EPBSProposal(context.Background(), &api.EPBSProposalOpts{Slot: 123, IncludePayload: &includePayload})
+	require.NoError(t, err)
+	message := mockResponse.Data.Gloas.Body.SignedExecutionPayloadBid.Message
+	message.Value = bid.Value
+	message.ExecutionPayment = bid.ExecutionPayment
+	message.BuilderIndex = bid.BuilderIndex
+	var block []byte
+	if useSSZ {
+		block, err = mockResponse.Data.Gloas.MarshalSSZ()
+	} else {
+		block, err = json.Marshal(mockResponse.Data.Gloas)
+	}
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/eth/v1/node/syncing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"head_slot":"0","sync_distance":"0","is_optimistic":false,"is_syncing":false}}`))
+		case "/eth/v1/node/version":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"version":"test"}}`))
+		case "/eth/v4/validator/blocks/123":
+			w.Header().Set("Eth-Consensus-Version", "gloas")
+			w.Header().Set("Eth-Execution-Payload-Value", "11000000000")
+			for _, url := range urls {
+				w.Header().Add("Eth-Builder-Url", url)
+			}
+			if useSSZ {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("Eth-Execution-Payload-Included", "false")
+				_, _ = w.Write(block)
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(append([]byte(`{"version":"gloas","execution_payload_included":false,"execution_payload_value":"11000000000","data":`), append(block, '}')...))
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	service, err := eth2http.New(context.Background(), eth2http.WithAddress(server.URL), eth2http.WithAllowDelayedStart(true), eth2http.WithEnforceJSON(!useSSZ), eth2http.WithLogLevel(zerolog.Disabled))
+	require.NoError(t, err)
+	return service.(client.EPBSProposalProvider).EPBSProposal(context.Background(), &api.EPBSProposalOpts{
+		Slot: 123, IncludePayload: &includePayload, BuilderConfig: config,
+	})
+}
+
+func TestEPBSProposalSelfBuildRetainsExecutionValue(t *testing.T) {
+	response, err := fetchEPBSProposalBid(t, &gloas.BuilderConfig{MinBid: 10}, nil,
+		&gloas.ExecutionPayloadBid{BuilderIndex: gloas.BuilderIndex(^uint64(0))}, false)
+	require.NoError(t, err)
+	require.Equal(t, big.NewInt(11_000_000_000), response.Data.ExecutionValue)
+	require.Equal(t, big.NewInt(11_000_000_000), response.Data.Value())
+}
+
+func TestEPBSProposalWithheldValueIsRemovedFromMetadata(t *testing.T) {
+	for _, useSSZ := range []bool{false, true} {
+		t.Run(fmt.Sprintf("SSZ_%t", useSSZ), func(t *testing.T) {
+			response, err := fetchEPBSProposalBid(t, &gloas.BuilderConfig{MinBid: 10}, []string{"https://unknown.example"},
+				&gloas.ExecutionPayloadBid{Value: 10}, useSSZ)
+			require.NoError(t, err)
+			require.Nil(t, response.Data.ExecutionValue)
+			for key := range response.Metadata {
+				require.NotEqual(t, "eth-execution-payload-value", strings.ToLower(key))
+				require.NotEqual(t, "execution_payload_value", strings.ToLower(key))
+			}
+		})
+	}
+}
+
+func TestEPBSProposalJoinedBuilderHeadersCannotAttributeBid(t *testing.T) {
+	config := validEPBSBuilderConfig()
+	config.MinBid = 10
+	config.Builders[0].URL = []byte("https://one.example;https://two.example")
+	_, err := fetchEPBSProposalBid(t, config, []string{"https://one.example", "https://two.example"},
+		&gloas.ExecutionPayloadBid{Value: 1}, false)
+	require.ErrorIs(t, err, client.ErrInconsistentResult)
+	require.ErrorContains(t, err, "below minimum")
+}
+
+func TestEPBSProposalBidPolicy(t *testing.T) {
+	entry := func(url string, minBid, maxPayment phase0.Gwei) *gloas.BuilderEntry {
+		builder := validEPBSBuilderConfig().Builders[0]
+		builder.URL = []byte(url)
+		builder.MinBid = minBid
+		builder.MaxExecutionPayment = maxPayment
+		return builder
+	}
+	tests := []struct {
+		name     string
+		config   *gloas.BuilderConfig
+		urls     []string
+		bid      *gloas.ExecutionPayloadBid
+		below    bool
+		withheld bool
+	}{
+		{
+			name: "DuplicateURLBelowP2PFloor",
+			config: &gloas.BuilderConfig{MinBid: 12, Builders: []*gloas.BuilderEntry{
+				entry("https://duplicate.example", 0, 2), entry("https://duplicate.example", 0, 3),
+			}},
+			urls: []string{"https://duplicate.example"}, bid: &gloas.ExecutionPayloadBid{Value: 10, ExecutionPayment: 1}, below: true,
+		},
+		{
+			name: "UnknownURLUsesLargestCap",
+			config: &gloas.BuilderConfig{MinBid: 11, Builders: []*gloas.BuilderEntry{
+				entry("https://one.example", 100, 1), entry("https://two.example", 100, 4),
+			}},
+			urls: []string{"https://unknown.example"}, bid: &gloas.ExecutionPayloadBid{Value: 8, ExecutionPayment: 3}, withheld: true,
+		},
+		{
+			name: "P2PPaymentUsesLargestCap",
+			config: &gloas.BuilderConfig{MinBid: 11, Builders: []*gloas.BuilderEntry{
+				entry("https://one.example", 100, 1), entry("https://two.example", 100, 4),
+			}},
+			bid: &gloas.ExecutionPayloadBid{Value: 8, ExecutionPayment: 3}, withheld: true,
+		},
+		{
+			name: "AttributedUsesEntryFloorAndCap",
+			config: &gloas.BuilderConfig{MinBid: 100, Builders: []*gloas.BuilderEntry{
+				entry("https://one.example", 0, 0), entry("https://two.example", 11, 2),
+			}},
+			urls: []string{"https://two.example"}, bid: &gloas.ExecutionPayloadBid{Value: 10, ExecutionPayment: 1},
+		},
+		{
+			name: "AttributedCannotUseAnotherEntryCap",
+			config: &gloas.BuilderConfig{MinBid: 0, Builders: []*gloas.BuilderEntry{
+				entry("https://one.example", 11, 0), entry("https://two.example", 0, 10),
+			}},
+			urls: []string{"https://one.example"}, bid: &gloas.ExecutionPayloadBid{Value: 10, ExecutionPayment: 1}, below: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := fetchEPBSProposalBid(t, test.config, test.urls, test.bid, false)
+			if test.below {
+				require.ErrorIs(t, err, client.ErrInconsistentResult)
+				require.ErrorContains(t, err, "below minimum")
+				return
+			}
+			require.NoError(t, err)
+			if test.withheld {
+				require.Nil(t, response.Data.ExecutionValue)
+			} else {
+				require.Equal(t, big.NewInt(11_000_000_000), response.Data.ExecutionValue)
+			}
+		})
+	}
 }
