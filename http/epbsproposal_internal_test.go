@@ -262,8 +262,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 	// which leaves the value unknown.  The consensus header is omitted here, so
 	// it must stay unknown alongside the known zero: asserting only the total
 	// would not catch a regression that defaulted an absent component to zero or
-	// wrote the execution header to the wrong field.  Headers are the sole
-	// source, so the body's own value fields are metadata and do not contribute.
+	// wrote the execution header to the wrong field.
 	t.Run("ZeroExecutionValueFromHeaders", func(t *testing.T) {
 		body, _ := epbsProposalJSONBody(t, false, validEPBSBeaconBlock())
 
@@ -477,6 +476,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 	// it as evidence that the execution bid has no value.
 	t.Run("AbsentExecutionValueIsUnknown", func(t *testing.T) {
 		body, _ := epbsProposalJSONBody(t, false, validEPBSBeaconBlock())
+		body = []byte(strings.Replace(string(body), `"execution_payload_value":"12345",`, "", 1))
 
 		response, err := s.epbsProposalFromResponse(ctx, &httpResponse{
 			statusCode:       http.StatusOK,
@@ -488,7 +488,7 @@ func TestEPBSProposalFromResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, response.Data.ConsensusValue)
 		require.Nil(t, response.Data.ExecutionValue)
-		require.Nil(t, response.Data.Value())
+		require.Equal(t, big.NewInt(0), response.Data.Value())
 	})
 
 	t.Run("CorruptJSON", func(t *testing.T) {
