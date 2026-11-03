@@ -72,3 +72,35 @@ func TestBuilderVersionYAML(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalYAML(data))
 	require.Equal(t, builder, &decoded)
 }
+
+func TestBuilderVersionJSONEncodings(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		version string
+		valid   bool
+	}{
+		{name: "Quoted", version: `"255"`, valid: true},
+		{name: "LegacyNumber", version: `255`, valid: true},
+		{name: "TooLarge", version: `"256"`},
+		{name: "Negative", version: `-1`},
+		{name: "Invalid", version: `"abc"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(testBuilder())
+			require.NoError(t, err)
+			var object map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(data, &object))
+			object["version"] = json.RawMessage(test.version)
+			data, err = json.Marshal(object)
+			require.NoError(t, err)
+			var result gloas.Builder
+			err = json.Unmarshal(data, &result)
+			if !test.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.EqualValues(t, 255, result.Version)
+		})
+	}
+}
