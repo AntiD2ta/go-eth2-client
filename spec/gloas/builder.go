@@ -37,14 +37,31 @@ type Builder struct {
 	WithdrawableEpoch phase0.Epoch
 }
 
+type builderVersion uint8
+
+func (v builderVersion) MarshalJSON() ([]byte, error) {
+	return fmt.Appendf(nil, `"%d"`, v), nil
+}
+
+func (v *builderVersion) UnmarshalJSON(input []byte) error {
+	value := strings.Trim(string(input), `"`)
+	parsed, err := strconv.ParseUint(value, 10, 8)
+	if err != nil {
+		return err
+	}
+	*v = builderVersion(parsed)
+
+	return nil
+}
+
 // builderJSON is the spec representation of the struct.
 type builderJSON struct {
-	PublicKey         string `json:"pubkey"`
-	Version           uint8  `json:"version"`
-	ExecutionAddress  string `json:"execution_address"`
-	Balance           string `json:"balance"`
-	DepositEpoch      string `json:"deposit_epoch"`
-	WithdrawableEpoch string `json:"withdrawable_epoch"`
+	PublicKey         string         `json:"pubkey"`
+	Version           builderVersion `json:"version"`
+	ExecutionAddress  string         `json:"execution_address"`
+	Balance           string         `json:"balance"`
+	DepositEpoch      string         `json:"deposit_epoch"`
+	WithdrawableEpoch string         `json:"withdrawable_epoch"`
 }
 
 // builderYAML is the spec representation of the struct.
@@ -61,7 +78,7 @@ type builderYAML struct {
 func (v *Builder) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&builderJSON{
 		PublicKey:         fmt.Sprintf("%#x", v.PublicKey),
-		Version:           v.Version,
+		Version:           builderVersion(v.Version),
 		ExecutionAddress:  v.ExecutionAddress.String(),
 		Balance:           fmt.Sprintf("%d", v.Balance),
 		DepositEpoch:      fmt.Sprintf("%d", v.DepositEpoch),
@@ -95,7 +112,7 @@ func (v *Builder) unpack(builderJSON *builderJSON) error {
 
 	copy(v.PublicKey[:], publicKey)
 
-	v.Version = builderJSON.Version
+	v.Version = uint8(builderJSON.Version)
 
 	if builderJSON.ExecutionAddress == "" {
 		return errors.New("execution address missing")
