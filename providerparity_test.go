@@ -23,6 +23,11 @@ import (
 
 // Provider assertions keep implementations in parity.
 var (
+	_ client.BuildersProvider         = (*http.Service)(nil)
+	_ client.BuildersProvider         = (*multi.Service)(nil)
+	_ client.BuildersProvider         = (*mock.Service)(nil)
+	_ client.BuildersProvider         = (*testclients.Erroring)(nil)
+	_ client.BuildersProvider         = (*testclients.Sleepy)(nil)
 	_ client.ProposerDutiesV2Provider = (*http.Service)(nil)
 	_ client.ProposerDutiesV2Provider = (*multi.Service)(nil)
 	_ client.ProposerDutiesV2Provider = (*mock.Service)(nil)

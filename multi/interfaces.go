@@ -34,6 +34,7 @@ var (
 	_ consensusclient.AttestationRewardsProvider            = (*Service)(nil)
 	_ consensusclient.AttestationsSubmitter                 = (*Service)(nil)
 	_ consensusclient.AttesterDutiesProvider                = (*Service)(nil)
+	_ consensusclient.BuildersProvider                      = (*Service)(nil)
 	_ consensusclient.BlockRewardsProvider                  = (*Service)(nil)
 	_ consensusclient.DepositContractProvider               = (*Service)(nil)
 	_ consensusclient.SyncCommitteeDutiesProvider           = (*Service)(nil)
