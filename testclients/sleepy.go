@@ -596,6 +596,23 @@ func (s *Sleepy) ValidatorBalances(ctx context.Context,
 	return next.ValidatorBalances(ctx, opts)
 }
 
+// Builders provides the builders, with their balance and status, for a given state.
+func (s *Sleepy) Builders(ctx context.Context,
+	opts *api.BuildersOpts,
+) (
+	*api.Response[[]*apiv1.Builder],
+	error,
+) {
+	s.sleep(ctx)
+
+	next, isNext := s.next.(consensusclient.BuildersProvider)
+	if !isNext {
+		return nil, errors.New("next does not support this call")
+	}
+
+	return next.Builders(ctx, opts)
+}
+
 // Validators provides the validators, with their balance and status, for a given state.
 func (s *Sleepy) Validators(ctx context.Context,
 	opts *api.ValidatorsOpts,
