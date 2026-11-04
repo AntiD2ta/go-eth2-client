@@ -100,11 +100,6 @@ func (s *Service) EPBSProposal(ctx context.Context,
 		"Eth-Consensus-Version": spec.DataVersionGloas.String(),
 	}
 
-	responseLimit := maxEPBSProposalResponseSize
-	if contentType == ContentTypeJSON {
-		responseLimit = maxEPBSProposalJSONResponseSize
-	}
-
 	httpResponse, err := s.postWithResponseLimit(
 		ctx,
 		endpoint,
@@ -113,7 +108,7 @@ func (s *Service) EPBSProposal(ctx context.Context,
 		bytes.NewReader(body),
 		contentType,
 		headers,
-		responseLimit,
+		responseLimits{ssz: maxEPBSProposalResponseSize, json: maxEPBSProposalJSONResponseSize},
 	)
 	if err != nil {
 		return nil, errors.Join(errors.New("failed to request epbs beacon block proposal"), err)
