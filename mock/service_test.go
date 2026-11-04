@@ -15,6 +15,7 @@ package mock_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/attestantio/go-eth2-client/api"
@@ -46,4 +47,29 @@ func testSpec(ctx context.Context, opts *api.SpecOpts) (*api.Response[map[string
 		Data:     data,
 		Metadata: make(map[string]any),
 	}, nil
+}
+
+func TestConcurrentClients(t *testing.T) {
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				ctx, cancel := context.WithCancel(context.Background())
+				_, err := mock.New(ctx)
+				cancel()
+				if err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 }
