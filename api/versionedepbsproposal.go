@@ -203,19 +203,18 @@ func (v *VersionedEPBSProposal) Blobs() ([]deneb.Blob, error) {
 	return contents.Blobs, nil
 }
 
-// Value returns the total value of the proposal, or nil when its execution
-// value was not supplied by the beacon node.
+// Value returns the known proposal value in Wei. Missing components count as
+// zero; check ExecutionValue and ConsensusValue to distinguish an unknown value.
 func (v *VersionedEPBSProposal) Value() *big.Int {
-	if v.ExecutionValue == nil {
-		return nil
-	}
-
-	value := big.NewInt(0)
+	value := new(big.Int)
 	if v.ConsensusValue != nil {
 		value.Add(value, v.ConsensusValue)
 	}
+	if v.ExecutionValue != nil {
+		value.Add(value, v.ExecutionValue)
+	}
 
-	return value.Add(value, v.ExecutionValue)
+	return value
 }
 
 // IsEmpty returns true if no proposal is populated.
