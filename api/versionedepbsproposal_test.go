@@ -677,10 +677,7 @@ func TestVersionedEPBSProposalContents(t *testing.T) {
 	})
 }
 
-// TestVersionedEPBSProposalValue verifies the total is unknown -- nil -- unless
-// the execution value arrived, and that a missing consensus value counts as
-// zero rather than poisoning a known execution value.  Both components are
-// populated from response headers that a node may omit.
+// TestVersionedEPBSProposalValue verifies missing components count as zero.
 func TestVersionedEPBSProposalValue(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -689,8 +686,8 @@ func TestVersionedEPBSProposalValue(t *testing.T) {
 		expected  *big.Int
 	}{
 		{name: "Both", consensus: big.NewInt(3), execution: big.NewInt(4), expected: big.NewInt(7)},
-		{name: "NeitherSet"},
-		{name: "ConsensusOnly", consensus: big.NewInt(5)},
+		{name: "NeitherSet", expected: big.NewInt(0)},
+		{name: "ConsensusOnly", consensus: big.NewInt(5), expected: big.NewInt(5)},
 		{name: "ExecutionZero", execution: big.NewInt(0), expected: big.NewInt(0)},
 		{name: "ExecutionOnly", execution: big.NewInt(6), expected: big.NewInt(6)},
 	}
@@ -705,6 +702,15 @@ func TestVersionedEPBSProposalValue(t *testing.T) {
 			require.Equal(t, test.expected, proposal.Value())
 		})
 	}
+}
+
+func TestVersionedEPBSProposalValueDoesNotMutateComponents(t *testing.T) {
+	proposal := &api.VersionedEPBSProposal{ConsensusValue: big.NewInt(3), ExecutionValue: big.NewInt(4)}
+	value := proposal.Value()
+	value.SetInt64(0)
+	require.Equal(t, big.NewInt(3), proposal.ConsensusValue)
+	require.Equal(t, big.NewInt(4), proposal.ExecutionValue)
+	require.Positive(t, proposal.Value().Cmp((&api.VersionedEPBSProposal{}).Value()))
 }
 
 // TestVersionedEPBSProposalIsEmpty verifies emptiness tracks the arms rather
