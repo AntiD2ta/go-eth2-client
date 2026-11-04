@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +80,10 @@ func (s *Service) Spec(ctx context.Context,
 	}
 
 	config := parseSpecMap(data)
+
+	if milliseconds, ok := config["SLOT_DURATION_MS"].(uint64); ok && milliseconds <= uint64(math.MaxInt64/time.Millisecond) {
+		config["SECONDS_PER_SLOT"] = time.Duration(milliseconds) * time.Millisecond
+	}
 
 	// The application mask domain type is not provided by all nodes, so add it here if not present.
 	if _, exists := config["DOMAIN_APPLICATION_MASK"]; !exists {
