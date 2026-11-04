@@ -72,3 +72,36 @@ func TestBuilderVersionYAML(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalYAML(data))
 	require.Equal(t, builder, &decoded)
 }
+
+// TestBuilderVersionJSON accepts the beacon API's quoted uint8 representation.
+func TestBuilderVersionJSON(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &fields))
+	fields["version"] = json.RawMessage(`"1"`)
+	data, err = json.Marshal(fields)
+	require.NoError(t, err)
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, builder, &decoded)
+	encoded, err := json.Marshal(&decoded)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(encoded, &fields))
+	require.JSONEq(t, `"1"`, string(fields["version"]))
+}
+
+func TestBuilderVersionJSONNumericCompatibility(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &fields))
+	fields["version"] = json.RawMessage(`1`)
+	data, err = json.Marshal(fields)
+	require.NoError(t, err)
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, builder, &decoded)
+}
