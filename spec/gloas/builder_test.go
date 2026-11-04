@@ -14,7 +14,9 @@
 package gloas_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/attestantio/go-eth2-client/spec/bellatrix"
@@ -71,4 +73,39 @@ func TestBuilderVersionYAML(t *testing.T) {
 	var decoded gloas.Builder
 	require.NoError(t, decoded.UnmarshalYAML(data))
 	require.Equal(t, builder, &decoded)
+}
+
+func TestBuilderJSONVersionWireFormat(t *testing.T) {
+	builder := testBuilder()
+	data, err := json.Marshal(builder)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"version":"1"`)
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, builder, &decoded)
+}
+
+func TestBuilderJSONVersionLegacyAndInvalid(t *testing.T) {
+	data, err := json.Marshal(testBuilder())
+	require.NoError(t, err)
+	var decoded gloas.Builder
+	require.NoError(t, json.Unmarshal(bytes.Replace(data, []byte(`"version":"1"`), []byte(`"version":1`), 1), &decoded))
+	require.Equal(t, testBuilder(), &decoded)
+	for _, value := range []string{`"256"`, `"-1"`, `"bad"`, `{}`} {
+		err = json.Unmarshal(bytes.Replace(data, []byte(`"version":"1"`), []byte(`"version":`+value), 1), &decoded)
+		require.Error(t, err)
+	}
+}
+
+func TestBuilderJSONVersionDecimalRange(t *testing.T) {
+	for _, version := range []uint8{10, 128, 255} {
+		builder := testBuilder()
+		builder.Version = version
+		data, err := json.Marshal(builder)
+		require.NoError(t, err)
+		require.Contains(t, string(data), fmt.Sprintf(`"version":"%d"`, version))
+		var decoded gloas.Builder
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		require.Equal(t, builder, &decoded)
+	}
 }
